@@ -1,0 +1,20 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "taska"
+authors = [{name = "ClericPy", email = "clericpy@gmail.com"}]
+readme = "README.md"
+license = {file = "LICENSE"}
+classifiers = ["License :: OSI Approved :: MIT License"]
+dynamic = ["version", "description"]
+requires-python = ">=3.7"
+dependencies = [
+    "morebuiltins >=1.0.5",
+    "fastapi >=0.111.0",
+    "psutil",
+]
+
+[project.urls]
+Home = "https://github.com/ClericPy/taska"
