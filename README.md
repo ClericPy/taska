@@ -14,9 +14,10 @@ Code runner with typing-hint.
       - /workspaces/workspace1 (`code1.py, code2.py, package1/module.py`)
         - /jobs
           - /job1
-            - /run.py
+            - /runner.py
             - /meta.json
               > cwd=/workspace1(`const`)\
+              > python_path=/work_dir/default_python/venv1/bin/python.exe\
               > entrypoint=package1.module:function1\
               > params={"arg1": 1, "arg2": "str"}\
               > enable=1\
@@ -31,9 +32,10 @@ Code runner with typing-hint.
             - /result.log
               > {"start": "2024-07-14 23:30:57", "end": "2024-07-14 23:33:57", "result": 321}
           - /job2
-            - /run.py
+            - /runner.py
             - /meta.json
               > cwd=/workspace1(`const`)\
+              > python_path=/work_dir/default_python/venv1/bin/python.exe\
               > entrypoint=code1:function2\
               > params={}\
               > crontab=0 */5 * * *\

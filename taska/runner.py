@@ -52,7 +52,7 @@ def main():
     job_dir = Path(__file__).parent
     meta = json.loads(job_dir.joinpath("meta.json").read_text(encoding="utf-8"))
     pid = str(os.getpid())
-    pid_file = job_dir / "pid.txt"
+    pid_file = job_dir / "job.pid"
     pid_file.write_text(pid)
     cwd_path = Path(meta["cwd"])
     sys.path.insert(0, cwd_path.as_posix())
