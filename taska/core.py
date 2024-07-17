@@ -28,7 +28,8 @@ def start_job_file(job_path: typing.Union[Path, str]):
             cmd,
             creationflags=subprocess.DETACHED_PROCESS
             | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.CREATE_NO_WINDOW,
+            | subprocess.CREATE_NO_WINDOW
+            | subprocess.CREATE_BREAKAWAY_FROM_JOB,
             cwd=job_dir.as_posix(),
         )
     else:
