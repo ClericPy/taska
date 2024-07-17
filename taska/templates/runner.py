@@ -126,17 +126,21 @@ def setup_stdout_logger(cwd_path, stdout_limit):
     return stdout_logger
 
 
-def setup_timeout(timeout, start_at):
+def setup_timeout(timeout, start_ts, result_item, result_limit):
     if timeout and isinstance(timeout, int):
 
         def force_shutdown():
+            result_item["error"] = TimeoutError(f"timeout={timeout}")
+            log_result(result_limit, result_item, start_ts)
+            print()
             print(
-                f"[ERROR] Timeout Kill({timeout}s)!pid: {os.getpid()}, start_at: {start_at}",
+                f"[ERROR] Timeout Kill({timeout}s)!pid: {os.getpid()}, {result_item}",
                 flush=True,
             )
             os._exit(1)
 
-        kill_timer = Timer(timeout, daemon=True, function=force_shutdown)
+        kill_timer = Timer(timeout, function=force_shutdown)
+        kill_timer.daemon = True
         kill_timer.start()
         atexit.register(kill_timer.cancel)
 
@@ -214,7 +218,7 @@ def main():
         setup_stdout_logger(cwd_path, stdout_limit)
         print(f"[INFO] Job start. pid: {pid_str}", flush=True)
         setup_mem_limit(meta["mem_limit"])
-        setup_timeout(meta.get("timeout"), start_at)
+        setup_timeout(meta.get("timeout"), start_ts, result_item, result_limit)
         result_item["result"] = start_job(meta["entrypoint"], meta["params"], cwd_path)
     except Exception as e:
         print(
