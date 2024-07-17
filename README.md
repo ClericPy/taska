@@ -9,12 +9,12 @@ Code runner with typing-hint.
 
 - /work_dir
   > work_dir=`$WORK_DIR/$CWD`
+  - /runner.py
   - /default_python (`executable=sys.executable`)
     - /venv1 (`requirements.txt < pip,six,morebuiltins`)
       - /workspaces/workspace1 (`code1.py, code2.py, package1/module.py`)
         - /jobs
           - /job1
-            - /runner.py
             - /meta.json
               > cwd=/workspace1(`const`)\
               > python_path=/work_dir/default_python/venv1/bin/python.exe\
@@ -32,7 +32,6 @@ Code runner with typing-hint.
             - /result.log
               > {"start": "2024-07-14 23:30:57", "end": "2024-07-14 23:33:57", "result": 321}
           - /job2
-            - /runner.py
             - /meta.json
               > cwd=/workspace1(`const`)\
               > python_path=/work_dir/default_python/venv1/bin/python.exe\

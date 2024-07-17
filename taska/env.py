@@ -27,10 +27,6 @@ class WorkspaceDirConf(typing.TypedDict):
 
 
 class Job(typing.TypedDict):
-    # [const]cwd: '/path/to/workspace/'
-    cwd: str
-    # [const]python_path: venv/bin/python, venv/Scripts/python.exe
-    python_path: str
     # entrypoint = 'package.module:function'
     entrypoint: str
     # params = { 'key': 'value' }
@@ -55,11 +51,14 @@ class JobDirConf(typing.TypedDict):
 class Env:
     executable_file_name = "python_path"
     default_executable = sys.executable
-    default_default_python_name = "default_python"
+    default_python_dir_name = "default_python"
 
     @classmethod
     def prepare_root_dir(cls, target_dir: Path):
         target_dir.mkdir(parents=True, exist_ok=True)
+        target_dir.joinpath("runner.py").write_bytes(
+            Path(__file__).parent.joinpath("./templates/runner.py").read_bytes()
+        )
         return target_dir.resolve()
 
     @classmethod
@@ -102,9 +101,6 @@ class Env:
             executable = (venv_dir / "Scripts" / "python.exe").resolve().as_posix()
         else:
             executable = (venv_dir / "bin" / "python").resolve().as_posix()
-        venv_dir.joinpath(cls.executable_file_name).write_text(
-            executable, encoding="utf-8"
-        )
         if pip_commands:
             temp_req_file.write_text("\n".join(pip_commands), encoding="utf-8")
             cmd = [
@@ -143,16 +139,9 @@ class Env:
         job_dir = target_dir / "jobs" / job_dir_conf["dir_name"]
         job_dir.mkdir(parents=True, exist_ok=True)
         job = job_dir_conf["job"]
-        job["cwd"] = job_dir.parent.parent.resolve().as_posix()
-        job["python_path"] = job_dir.parent.parent.parent.parent.joinpath(
-            "python_path"
-        ).read_text()
         job_dir.joinpath("meta.json").write_text(
             json.dumps(job, indent=2, ensure_ascii=False),
             encoding="utf-8",
-        )
-        job_dir.joinpath("runner.py").write_bytes(
-            Path(__file__).parent.joinpath("runner.py").read_bytes()
         )
         return job_dir.resolve()
 
@@ -181,28 +170,33 @@ class Env:
     def prepare_default_env(cls, root_dir: Path, force=False):
         root_dir.mkdir(parents=True, exist_ok=True)
         job: Job = default_dict(Job)
-        job["entrypoint"] = "demo_code:demo_function"
-        job["params"] = {"a": 1, "b": 2}
-        if not force and root_dir.joinpath(cls.default_default_python_name).is_dir():
+        job["entrypoint"] = "os_system:os_system"
+        if sys.platform == "win32":
+            job["params"] = {
+                "cmd": "wmic os get FreePhysicalMemory,TotalVisibleMemorySize"
+            }
+        else:
+            job["params"] = {"cmd": "df -h"}
+        if not force and root_dir.joinpath(cls.default_python_dir_name).is_dir():
             return
         root_dir, python_dir, venv_dir, workspace_dir, job_dir = cls.prepare_all(
             root_dir,
             python_dir_conf={
-                "dir_name": cls.default_default_python_name,
+                "dir_name": cls.default_python_dir_name,
                 "executable": cls.default_executable,
             },
             venv_dir_conf={"dir_name": "venv1", "requirements": ["morebuiltins"]},
             workspace_dir_conf={"dir_name": "workspace1"},
             job_dir_conf={"dir_name": "job1", "job": job},
         )
-        workspace_dir.joinpath("demo_code.py").write_text(
-            'def demo_function(a:int, b:int):\n    print("stdout demo")\n    return ("result", a, b)'
+
+        workspace_dir.joinpath("os_system.py").write_text(
+            r"def os_system(cmd):import os; os.system(cmd)"
         )
 
 
 def test():
     root_dir = Path("../demo_path/") / "demo"
-    # {'cwd': '', 'entrypoint': '', 'params': {}, 'enable': 0, 'crontab': '', 'timeout': 0, 'mem_limit': '', 'result_limit': '', 'stdout_limit': ''}
     Env.prepare_default_env(root_dir, force=True)
 
 

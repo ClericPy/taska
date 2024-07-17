@@ -1,37 +1,35 @@
-import json
 import subprocess
 import sys
+import typing
 from pathlib import Path
 
-# job_meta:
-# {
-#   "cwd": "/demo_path/demo/default_python/venv1/workspaces/workspace1",
-#   "python_path": "/demo_path/demo/default_python/venv1/Scripts/python.exe",
-#   "entrypoint": "",
-#   "params": {},
-#   "enable": 0,
-#   "crontab": "",
-#   "timeout": 0,
-#   "mem_limit": "",
-#   "result_limit": "",
-#   "stdout_limit": ""
-# }
 
-
-def start_proc(job_meta_path: Path):
-    meta = json.loads(job_meta_path.read_text(encoding="utf-8"))
-    cmd = [
-        meta["python_path"],
-        job_meta_path.parent.joinpath("runner.py").resolve().as_posix(),
-    ]
+def start_job_file(job_path: typing.Union[Path, str]):
+    job_path = Path(job_path).resolve()
+    if job_path.is_dir():
+        job_dir = job_path
+        # job dir -> job meta file
+        job_path = job_dir / "meta.json"
+    elif job_path.is_file():
+        job_dir = job_path.parent
+    else:
+        raise FileNotFoundError(job_path)
+    workspace_dir = job_dir.parent.parent
+    venv_dir = workspace_dir.parent.parent
+    runner_path = venv_dir.parent.parent / "runner.py"
+    assert runner_path.is_file()
     if sys.platform == "win32":
-        proc = subprocess.Popen(
+        executable = venv_dir / "Scripts" / "python.exe"
+    else:
+        executable = venv_dir / "bin" / "python"
+    cmd = [executable.as_posix(), runner_path.as_posix()]
+    if sys.platform == "win32":
+        return subprocess.Popen(
             cmd,
             creationflags=subprocess.DETACHED_PROCESS
             | subprocess.CREATE_NEW_PROCESS_GROUP
             | subprocess.CREATE_NO_WINDOW,
-            cwd=meta["cwd"],
+            cwd=job_dir.as_posix(),
         )
     else:
-        proc = subprocess.Popen(cmd, start_new_session=True, cwd=meta["cwd"])
-    return proc
+        return subprocess.Popen(cmd, start_new_session=True, cwd=job_dir.as_posix())
