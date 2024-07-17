@@ -190,9 +190,25 @@ class Env:
             job_dir_conf={"dir_name": "job1", "job": job},
         )
 
-        workspace_dir.joinpath("os_system.py").write_text(
-            r"def os_system(cmd):import os; os.system(cmd)"
-        )
+        workspace_dir.joinpath("os_system.py").write_text(r"""
+def os_system(cmd):
+    import subprocess
+
+    p = subprocess.Popen(
+        cmd,
+        shell=True,
+        stderr=subprocess.STDOUT,
+        stdout=subprocess.PIPE,
+        text=True,
+        errors="replace",
+    )
+    while True:
+        buff = p.stdout.read(1)
+        print(buff, end="", flush=True)
+        if not buff:
+            break
+    return p.returncode
+""")
 
 
 def test():
