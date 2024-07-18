@@ -8,7 +8,7 @@ import traceback
 from concurrent.futures import Future
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from threading import Thread
+from threading import Thread, Timer
 
 
 class LoggerStream:
@@ -150,16 +150,22 @@ def start_job(entrypoint, params, cwd_path, EXEC_GLOBAL_FUTURE: Future):
             code = f"import {module}"
             if function:
                 code += f"; EXEC_GLOBAL_FUTURE.set_result({module}.{function}(**RUNNER_PARAMS))"
-            exec(
-                code,
-                {
-                    "EXEC_GLOBAL_FUTURE": EXEC_GLOBAL_FUTURE,
-                    "RUNNER_PARAMS": params,
-                },
-            )
-            EXEC_GLOBAL_FUTURE.set_exception(
-                RuntimeError("Unknown Error, but no result(not None)")
-            )
+            try:
+                exec(
+                    code,
+                    {
+                        "EXEC_GLOBAL_FUTURE": EXEC_GLOBAL_FUTURE,
+                        "RUNNER_PARAMS": params,
+                    },
+                )
+                if not EXEC_GLOBAL_FUTURE.done():
+                    EXEC_GLOBAL_FUTURE.set_exception(
+                        RuntimeError("Unknown Error, but no result(not None)")
+                    )
+            except Exception as e:
+                if not EXEC_GLOBAL_FUTURE.done():
+                    EXEC_GLOBAL_FUTURE.set_exception(e)
+
         else:
             EXEC_GLOBAL_FUTURE.set_exception(
                 ValueError("Invalid entrypoint: %s" % entrypoint)
@@ -197,6 +203,7 @@ def main():
     pid_str = str(os.getpid())
     pid_file = cwd_path / "job.pid"
     try:
+        thread = None
         running_pid = get_running_pid(pid_file)
         if running_pid:
             raise SingletonError(
@@ -208,11 +215,12 @@ def main():
         print(f"[INFO] Job start. pid: {pid_str}", flush=True)
         setup_mem_limit(meta["mem_limit"])
         EXEC_GLOBAL_FUTURE: Future = Future()
-        Thread(
+        thread = Thread(
             target=start_job,
             args=(meta["entrypoint"], meta["params"], cwd_path, EXEC_GLOBAL_FUTURE),
             daemon=True,
-        ).start()
+        )
+        thread.start()
 
         try:
             timeout = meta.get("timeout")
@@ -221,7 +229,8 @@ def main():
             result_item["result"] = EXEC_GLOBAL_FUTURE.result(timeout=timeout)
         except TimeoutError:
             e = TimeoutError(f"timeout={timeout}")
-            EXEC_GLOBAL_FUTURE.set_exception(e)
+            if not EXEC_GLOBAL_FUTURE.done():
+                EXEC_GLOBAL_FUTURE.set_exception(e)
             raise e
     except Exception as e:
         print(
@@ -234,6 +243,10 @@ def main():
         print(f"[INFO] Job end. pid: {pid_str}, start_at: {start_at}", flush=True)
         if pid_file.is_file() and pid_file.read_text() == pid_str:
             pid_file.write_text("")
+        if thread and thread.is_alive():
+            timer = Timer(1, lambda: os._exit(1))
+            timer.daemon = True
+            timer.start()
 
 
 if __name__ == "__main__":
