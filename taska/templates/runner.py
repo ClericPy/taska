@@ -1,4 +1,3 @@
-import atexit
 import json
 import logging
 import os
@@ -6,9 +5,10 @@ import re
 import sys
 import time
 import traceback
+from concurrent.futures import Future
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from threading import Timer
+from threading import Thread
 
 
 class LoggerStream:
@@ -126,25 +126,6 @@ def setup_stdout_logger(cwd_path, stdout_limit):
     return stdout_logger
 
 
-def setup_timeout(timeout, start_ts, result_item, result_limit):
-    if timeout and isinstance(timeout, int):
-
-        def force_shutdown():
-            result_item["error"] = TimeoutError(f"timeout={timeout}")
-            log_result(result_limit, result_item, start_ts)
-            print()
-            print(
-                f"[ERROR] Timeout Kill({timeout}s)!pid: {os.getpid()}, {result_item}",
-                flush=True,
-            )
-            os._exit(1)
-
-        kill_timer = Timer(timeout, function=force_shutdown)
-        kill_timer.daemon = True
-        kill_timer.start()
-        atexit.register(kill_timer.cancel)
-
-
 def setup_mem_limit(mem_limit: str):
     if sys.platform != "win32" and mem_limit:
         mem_limit = read_size(mem_limit)
@@ -154,7 +135,7 @@ def setup_mem_limit(mem_limit: str):
             resource.setrlimit(resource.RLIMIT_RSS, (mem_limit, mem_limit))
 
 
-def start_job(entrypoint, params, cwd_path):
+def start_job(entrypoint, params, cwd_path, EXEC_GLOBAL_FUTURE: Future):
     pattern = r"^\w+(\.\w+)?(:\w+)?$"
     if re.match(pattern, entrypoint):
         module, _, function = entrypoint.partition(":")
@@ -168,17 +149,25 @@ def start_job(entrypoint, params, cwd_path):
                 module = module_path.stem
             code = f"import {module}"
             if function:
-                locals()["RUNNER_PARAMS"] = params
-                code += f"; globals().setdefault('RUNNER_GLOBAL_RESULT', {module}.{function}(**locals()['RUNNER_PARAMS']))"
-            exec(code, globals(), locals())
-            if "RUNNER_GLOBAL_RESULT" in globals():
-                return globals()["RUNNER_GLOBAL_RESULT"]
-            else:
-                raise RuntimeError("Unknown Error, but no result(not None)")
+                code += f"; EXEC_GLOBAL_FUTURE.set_result({module}.{function}(**RUNNER_PARAMS))"
+            exec(
+                code,
+                {
+                    "EXEC_GLOBAL_FUTURE": EXEC_GLOBAL_FUTURE,
+                    "RUNNER_PARAMS": params,
+                },
+            )
+            EXEC_GLOBAL_FUTURE.set_exception(
+                RuntimeError("Unknown Error, but no result(not None)")
+            )
         else:
-            raise ValueError("Invalid entrypoint: %s" % entrypoint)
+            EXEC_GLOBAL_FUTURE.set_exception(
+                ValueError("Invalid entrypoint: %s" % entrypoint)
+            )
     else:
-        raise ValueError("Invalid entrypoint: %s" % entrypoint)
+        EXEC_GLOBAL_FUTURE.set_exception(
+            ValueError("Invalid entrypoint: %s" % entrypoint)
+        )
 
 
 def main():
@@ -218,8 +207,22 @@ def main():
         setup_stdout_logger(cwd_path, stdout_limit)
         print(f"[INFO] Job start. pid: {pid_str}", flush=True)
         setup_mem_limit(meta["mem_limit"])
-        setup_timeout(meta.get("timeout"), start_ts, result_item, result_limit)
-        result_item["result"] = start_job(meta["entrypoint"], meta["params"], cwd_path)
+        EXEC_GLOBAL_FUTURE: Future = Future()
+        Thread(
+            target=start_job,
+            args=(meta["entrypoint"], meta["params"], cwd_path, EXEC_GLOBAL_FUTURE),
+            daemon=True,
+        ).start()
+
+        try:
+            timeout = meta.get("timeout")
+            if not timeout and isinstance(timeout, int):
+                timeout = None
+            result_item["result"] = EXEC_GLOBAL_FUTURE.result(timeout=timeout)
+        except TimeoutError:
+            e = TimeoutError(f"timeout={timeout}")
+            EXEC_GLOBAL_FUTURE.set_exception(e)
+            raise e
     except Exception as e:
         print(
             f"[ERROR] Job fail. pid: {pid_str}, start_at: {start_at}, error: {traceback.format_exc()}",

@@ -4,7 +4,7 @@ import typing
 from pathlib import Path
 
 
-def start_job_file(job_path: typing.Union[Path, str]):
+def launch_job(job_path: typing.Union[Path, str]):
     job_path = Path(job_path).resolve()
     if job_path.is_dir():
         job_dir = job_path
