@@ -1,5 +1,5 @@
 # taska
-Code runner with typing-hint.
+Code runner with typing-hint. Less is more, simple is the best.
 
 ## Folder structure:
 

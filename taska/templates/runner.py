@@ -197,6 +197,8 @@ def main():
     start_ts = time.time()
     result_item = {
         "start_at": start_at,
+        "end_at": None,
+        "duration": None,
         "result": None,
         "error": None,
     }

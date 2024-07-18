@@ -27,6 +27,7 @@ class WorkspaceDirConf(typing.TypedDict):
 
 
 class Job(typing.TypedDict):
+    description: str
     # entrypoint = 'package.module:function'
     entrypoint: str
     # params = { 'key': 'value' }
