@@ -1,13 +1,14 @@
 import json
 import logging
 import re
+import shutil
 import subprocess
 import sys
 import typing
 import venv
 from pathlib import Path
 
-from morebuiltins.utils import default_dict
+from morebuiltins.utils import default_dict, is_running
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +216,8 @@ def os_system(cmd):
 """)
 
     @classmethod
-    def launch_job(cls, job_path: typing.Union[Path, str]):
-        job_path = Path(job_path).resolve()
+    def launch_job(cls, job_path_or_dir: typing.Union[Path, str]):
+        job_path = Path(job_path_or_dir).resolve()
         if job_path.is_dir():
             job_dir = job_path
             # job dir -> job meta file
@@ -245,6 +246,21 @@ def os_system(cmd):
             )
         else:
             return subprocess.Popen(cmd, start_new_session=True, cwd=job_dir.as_posix())
+
+    @classmethod
+    def safe_rm_dir(cls, path: typing.Union[Path, str]):
+        path = Path(path)
+        if not path.is_dir():
+            return True
+        for pid_path in path.rglob("*.pid"):
+            try:
+                pid = pid_path.read_bytes()
+                if is_running(pid):
+                    return False
+            except FileNotFoundError:
+                continue
+        shutil.rmtree(path.resolve().as_posix(), ignore_errors=True)
+        return not path.is_dir()
 
 
 def test():
