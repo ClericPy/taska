@@ -127,7 +127,9 @@ def setup_stdout_logger(cwd_path, stdout_limit):
 
 
 def setup_mem_limit(mem_limit: str):
-    if sys.platform != "win32" and mem_limit:
+    if mem_limit:
+        if sys.platform == "win32":
+            raise ValueError(f"mem_limit={mem_limit} is not supported on windows")
         mem_limit = read_size(mem_limit)
         if mem_limit:
             import resource
@@ -135,14 +137,13 @@ def setup_mem_limit(mem_limit: str):
             resource.setrlimit(resource.RLIMIT_RSS, (mem_limit, mem_limit))
 
 
-def start_job(entrypoint, params, cwd_path, EXEC_GLOBAL_FUTURE: Future):
+def start_job(entrypoint, params, workspace_dir, EXEC_GLOBAL_FUTURE: Future):
     pattern = r"^\w+(\.\w+)?(:\w+)?$"
     if re.match(pattern, entrypoint):
         module, _, function = entrypoint.partition(":")
         if module:
             # main may be: 'module.py:main' or 'module.main' or 'package.module:main'
             # replace module.py to module
-            workspace_dir = cwd_path.parent.parent.resolve()
             sys.path.insert(0, workspace_dir.as_posix())
             module_path = workspace_dir / module
             if module_path.is_file():
@@ -189,6 +190,7 @@ def main():
         "stdout_limit": ""
     }"""
     cwd_path = Path(os.getcwd()).resolve()
+    workspace_dir = cwd_path.parent.parent.resolve()
     meta = json.loads(cwd_path.joinpath("meta.json").read_text(encoding="utf-8"))
     default_log_size = 5 * 1024**2
     result_limit = read_size(meta["result_limit"] or default_log_size)
@@ -204,6 +206,9 @@ def main():
     }
     pid_str = str(os.getpid())
     pid_file = cwd_path / "job.pid"
+    global_pid_file = workspace_dir / "pids" / pid_str
+    global_pid_file.parent.mkdir(parents=True, exist_ok=True)
+    global_pid_file.touch()
     try:
         thread = None
         running_pid = get_running_pid(pid_file)
@@ -219,7 +224,12 @@ def main():
         EXEC_GLOBAL_FUTURE: Future = Future()
         thread = Thread(
             target=start_job,
-            args=(meta["entrypoint"], meta["params"], cwd_path, EXEC_GLOBAL_FUTURE),
+            args=(
+                meta["entrypoint"],
+                meta["params"],
+                workspace_dir,
+                EXEC_GLOBAL_FUTURE,
+            ),
             daemon=True,
         )
         thread.start()
@@ -244,7 +254,8 @@ def main():
         log_result(result_limit, result_item, start_ts)
         print(f"[INFO] Job end. pid: {pid_str}, start_at: {start_at}", flush=True)
         if pid_file.is_file() and pid_file.read_text() == pid_str:
-            pid_file.write_text("")
+            pid_file.unlink(missing_ok=True)
+            global_pid_file.unlink(missing_ok=True)
         if thread and thread.is_alive():
             timer = Timer(1, lambda: os._exit(1))
             timer.daemon = True
