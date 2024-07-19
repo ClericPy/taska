@@ -59,6 +59,7 @@ class Env:
     @classmethod
     def prepare_root_dir(cls, target_dir: Path):
         target_dir.mkdir(parents=True, exist_ok=True)
+        target_dir.joinpath("pids").mkdir(parents=True, exist_ok=True)
         target_dir.joinpath("runner.py").write_bytes(
             Path(__file__).parent.joinpath("./templates/runner.py").read_bytes()
         )
