@@ -1,3 +1,4 @@
+import abc
 import json
 import logging
 import re
@@ -13,21 +14,8 @@ from morebuiltins.utils import default_dict, is_running
 logger = logging.getLogger(__name__)
 
 
-class PythonDirConf(typing.TypedDict):
-    dir_name: str
-    executable: str
-
-
-class VenvDirConf(typing.TypedDict):
-    dir_name: str
-    requirements: list
-
-
-class WorkspaceDirConf(typing.TypedDict):
-    dir_name: str
-
-
 class Job(typing.TypedDict):
+    name: str
     description: str
     # entrypoint = 'package.module:function'
     entrypoint: str
@@ -45,51 +33,71 @@ class Job(typing.TypedDict):
     stdout_limit: str
 
 
-class JobDirConf(typing.TypedDict):
-    dir_name: str
-    job: Job
-
-
-class Env:
-    executable_file_name = "python_path"
-    default_executable = sys.executable
-    default_python_dir_name = "default_python"
-    # may be pythonw.exe without console
-    win32_default_python_name = "python.exe"
+class DirBase(abc.ABC):
+    @classmethod
+    @abc.abstractmethod
+    def prepare_dir(
+        cls, target_dir: Path, name: str = "", force=False, **kwargs
+    ) -> Path:
+        raise NotImplementedError()
 
     @classmethod
-    def prepare_root_dir(cls, target_dir: Path):
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_dir.joinpath("pids").mkdir(parents=True, exist_ok=True)
-        target_dir.joinpath("runner.py").write_bytes(
+    def is_valid(cls, path: Path):
+        raise NotImplementedError()
+
+
+class RootDir(DirBase):
+    @classmethod
+    def prepare_dir(cls, target_dir: Path, name: str = "root", force=False, **kwargs):
+        root_dir = target_dir / name
+        if not force and cls.is_valid(root_dir):
+            return root_dir.resolve()
+        root_dir.mkdir(parents=True, exist_ok=True)
+        root_dir.joinpath("pids").mkdir(parents=True, exist_ok=True)
+        root_dir.joinpath("runner.py").write_bytes(
             Path(__file__).parent.joinpath("./templates/runner.py").read_bytes()
         )
-        return target_dir.resolve()
+        assert cls.is_valid(root_dir)
+        return root_dir.resolve()
 
     @classmethod
-    def prepare_python_dir(cls, target_dir: Path, python_dir_conf: PythonDirConf):
-        dir_name, executable = (
-            python_dir_conf["dir_name"],
-            python_dir_conf["executable"],
-        )
-        py_path = Path(executable)
-        if not py_path.exists():
-            raise FileNotFoundError(str(executable))
-        if not dir_name:
-            dir_name = re.sub(
-                r'[<>:"/\\|?*]', "_", py_path.with_suffix("").resolve().as_posix()
+    def is_valid(cls, path: Path):
+        return path.joinpath("runner.py").is_file()
+
+
+class PythonDir(DirBase):
+    @classmethod
+    def prepare_dir(cls, target_dir: Path, name: str = "", force=False, **kwargs):
+        python_dir = target_dir / name
+        if not force and cls.is_valid(python_dir):
+            return python_dir.resolve()
+        python: str = kwargs.get("python", sys.executable)
+        python_path = Path(python)
+        if not python_path.exists():
+            raise FileNotFoundError(str(python))
+        if not name:
+            name = re.sub(
+                r'[<>:"/\\|?*]', "_", python_path.with_suffix("").resolve().as_posix()
             )
-        python_dir = target_dir / dir_name
         python_dir.mkdir(parents=True, exist_ok=True)
-        python_dir.joinpath(cls.executable_file_name).write_text(
-            py_path.resolve().as_posix(), encoding="utf-8"
+        python_dir.joinpath("python_path").write_text(
+            python_path.resolve().as_posix(), encoding="utf-8"
         )
+        assert cls.is_valid(python_dir)
         return python_dir.resolve()
 
     @classmethod
-    def prepare_venv_dir(cls, target_dir: Path, venv_dir_conf: VenvDirConf):
-        pip_commands = venv_dir_conf["requirements"]
-        venv_dir = target_dir / venv_dir_conf["dir_name"]
+    def is_valid(cls, path: Path):
+        return path.joinpath("python_path").is_file()
+
+
+class VenvDir(DirBase):
+    @classmethod
+    def prepare_dir(cls, target_dir: Path, name="", force=False, **kwargs):
+        venv_dir = target_dir / name
+        if not force and cls.is_valid(venv_dir):
+            return venv_dir.resolve()
+        pip_commands: typing.List[str] = kwargs.get("requirements", [])
         req_file = venv_dir / "requirements.txt"
         temp_req_file = req_file.with_suffix(".temp")
         builder = venv.EnvBuilder(
@@ -129,91 +137,103 @@ class Env:
             temp_req_file.rename(req_file)
         else:
             req_file.touch()
+        assert cls.is_valid(venv_dir)
         return venv_dir.resolve()
 
     @classmethod
-    def prepare_workspace_dir(
-        cls, target_dir: Path, workspace_dir_conf: WorkspaceDirConf
-    ):
-        workspace_dir = target_dir / "workspaces" / workspace_dir_conf["dir_name"]
+    def is_valid(cls, path: Path):
+        return path.joinpath("requirements.txt").is_file()
+
+
+class WorkspaceDir(DirBase):
+    @classmethod
+    def prepare_dir(cls, target_dir: Path, name: str = "", force=False, **kwargs):
+        workspace_dir = target_dir / "workspaces" / name
+        if not force and cls.is_valid(workspace_dir):
+            return workspace_dir.resolve()
         workspace_dir.mkdir(parents=True, exist_ok=True)
+        workspace_dir.joinpath("jobs").mkdir(parents=True, exist_ok=True)
+        assert cls.is_valid(workspace_dir)
         return workspace_dir.resolve()
 
     @classmethod
-    def prepare_job_dir(cls, target_dir: Path, job_dir_conf: JobDirConf):
-        job_dir = target_dir / "jobs" / job_dir_conf["dir_name"]
+    def is_valid(cls, path: Path):
+        return path.joinpath("jobs").is_dir()
+
+
+class JobDir(DirBase):
+    @classmethod
+    def prepare_dir(cls, target_dir: Path, name: str = "", force=False, **kwargs):
+        job_dir = target_dir / "jobs" / name
+        if not force and cls.is_valid(job_dir):
+            return job_dir.resolve()
+        job: Job = kwargs["job"]
         job_dir.mkdir(parents=True, exist_ok=True)
-        job = job_dir_conf["job"]
         job_dir.joinpath("meta.json").write_text(
             json.dumps(job, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+        assert cls.is_valid(job_dir)
         return job_dir.resolve()
 
     @classmethod
-    def prepare_all(
-        cls,
-        root_dir: Path,
-        python_dir_conf: PythonDirConf,
-        venv_dir_conf: VenvDirConf,
-        workspace_dir_conf: WorkspaceDirConf,
-        job_dir_conf: JobDirConf,
-    ):
-        # 1. prepare root dir
-        root_dir = cls.prepare_root_dir(root_dir)
-        # 2. prepare python dir
-        python_dir = cls.prepare_python_dir(root_dir, python_dir_conf)
-        # 3. prepare venv dir
-        venv_dir = cls.prepare_venv_dir(python_dir, venv_dir_conf)
-        # 4. prepare workspace dir
-        workspace_dir = cls.prepare_workspace_dir(venv_dir, workspace_dir_conf)
-        # 5. prepare job dir
-        job_dir = cls.prepare_job_dir(workspace_dir, job_dir_conf)
-        return root_dir, python_dir, venv_dir, workspace_dir, job_dir
+    def is_valid(cls, path: Path):
+        return path.joinpath("meta.json").is_file()
+
+
+class Taska:
+    TREE_LEVELS = [RootDir, PythonDir, VenvDir, WorkspaceDir, JobDir]
+
+    def __init__(self, root_dir: typing.Union[Path, str]):
+        self.root_dir = Path(root_dir).resolve()
+        self.tree = self.init_dir_tree()
+
+    def init_dir_tree(self):
+        result = {}
+        for d in self.root_dir.iterdir():
+            if PythonDir.is_valid(d):
+                py_result = result.setdefault(d.name, {})
+                for v in d.iterdir():
+                    if VenvDir.is_valid(v):
+                        venv_result = py_result.setdefault(v.name, {})
+                        for w in v.joinpath("workspaces").iterdir():
+                            if WorkspaceDir.is_valid(w):
+                                w_result = venv_result.setdefault(w.name, [])
+                                for j in w.joinpath("jobs").iterdir():
+                                    if JobDir.is_valid(j):
+                                        w_result.append(j.name)
+        return result
 
     @classmethod
     def prepare_default_env(cls, root_dir: Path, force=False):
-        root_dir.mkdir(parents=True, exist_ok=True)
-        job: Job = default_dict(Job)
-        job["entrypoint"] = "os_system:os_system"
-        if sys.platform == "win32":
-            job["params"] = {
-                "cmd": "wmic os get FreePhysicalMemory,TotalVisibleMemorySize"
-            }
-        else:
-            job["params"] = {"cmd": "df -h"}
-        if not force and root_dir.joinpath(cls.default_python_dir_name).is_dir():
+        if not force and root_dir.joinpath("default").is_dir():
             return
-        root_dir, python_dir, venv_dir, workspace_dir, job_dir = cls.prepare_all(
-            root_dir,
-            python_dir_conf={
-                "dir_name": cls.default_python_dir_name,
-                "executable": cls.default_executable,
-            },
-            venv_dir_conf={"dir_name": "venv1", "requirements": ["morebuiltins"]},
-            workspace_dir_conf={"dir_name": "workspace1"},
-            job_dir_conf={"dir_name": "job1", "job": job},
+        # 1. prepare root dir
+        root_dir = RootDir.prepare_dir(root_dir.parent, name=root_dir.name, force=force)
+        # 2. prepare python dir
+        python_dir = PythonDir.prepare_dir(
+            root_dir, "default", force=force, python=sys.executable
         )
-
-        workspace_dir.joinpath("os_system.py").write_text(r"""
-def os_system(cmd):
-    import subprocess
-
-    p = subprocess.Popen(
-        cmd,
-        shell=True,
-        stderr=subprocess.STDOUT,
-        stdout=subprocess.PIPE,
-        text=True,
-        errors="replace",
-    )
-    while True:
-        buff = p.stdout.read(1)
-        print(buff, end="", flush=True)
-        if not buff:
-            break
-    return p.returncode
-""")
+        # 3. prepare venv dir
+        venv_dir = VenvDir.prepare_dir(
+            python_dir, "venv1", force=force, requirements=["morebuiltins"]
+        )
+        # 4. prepare workspace dir
+        workspace_dir = WorkspaceDir.prepare_dir(
+            venv_dir, name="workspace1", force=force
+        )
+        # 4.1 add code
+        workspace_dir.joinpath("mycode.py").write_text(
+            """import time\n\ndef main(arg): return print(time.strftime('%Y-%m-%d %H:%M:%S'), arg) or 'result'""",
+            encoding="utf-8",
+        )
+        # 5. prepare job dir
+        job: Job = default_dict(Job)
+        job["name"] = "test"
+        job["entrypoint"] = "mycode:main"
+        job["params"] = {"arg": "hello world"}
+        job_dir = JobDir.prepare_dir(workspace_dir, job["name"], force=force, job=job)
+        return root_dir, python_dir, venv_dir, workspace_dir, job_dir
 
     @classmethod
     def launch_job(cls, job_path_or_dir: typing.Union[Path, str]):
@@ -231,7 +251,7 @@ def os_system(cmd):
         runner_path = venv_dir.parent.parent / "runner.py"
         assert runner_path.is_file()
         if sys.platform == "win32":
-            executable = venv_dir / "Scripts" / cls.win32_default_python_name
+            executable = venv_dir / "Scripts" / "python.exe"
         else:
             executable = venv_dir / "bin" / "python"
         cmd = [executable.as_posix(), runner_path.as_posix()]
@@ -264,8 +284,10 @@ def os_system(cmd):
 
 
 def test():
-    root_dir = Path("../demo_path/") / "demo"
-    Env.prepare_default_env(root_dir, force=True)
+    root_dir = Path("../demo_path/")
+    Taska.prepare_default_env(root_dir, force=False)
+    ta = Taska(root_dir)
+    print(ta.tree)
 
 
 if __name__ == "__main__":
