@@ -190,7 +190,8 @@ def main():
         "stdout_limit": ""
     }"""
     cwd_path = Path(os.getcwd()).resolve()
-    workspace_dir = cwd_path.parent.parent.resolve()
+    workspace_dir = cwd_path.parent.parent
+    root_dir = workspace_dir.parent.parent.parent.parent
     meta = json.loads(cwd_path.joinpath("meta.json").read_text(encoding="utf-8"))
     default_log_size = 5 * 1024**2
     result_limit = read_size(meta["result_limit"] or default_log_size)
@@ -206,7 +207,7 @@ def main():
     }
     pid_str = str(os.getpid())
     pid_file = cwd_path / "job.pid"
-    global_pid_file = workspace_dir / "pids" / pid_str
+    global_pid_file = root_dir / "pids" / pid_str
     global_pid_file.parent.mkdir(parents=True, exist_ok=True)
     global_pid_file.touch()
     try:
@@ -255,7 +256,7 @@ def main():
         print(f"[INFO] Job end. pid: {pid_str}, start_at: {start_at}", flush=True)
         if pid_file.is_file() and pid_file.read_text() == pid_str:
             pid_file.unlink(missing_ok=True)
-            global_pid_file.unlink(missing_ok=True)
+        global_pid_file.unlink(missing_ok=True)
         if thread and thread.is_alive():
             timer = Timer(1, lambda: os._exit(1))
             timer.daemon = True

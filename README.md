@@ -7,12 +7,15 @@ Code runner with typing-hint. Less is more, simple is the best.
 
 ### Demo:
 
-- /work_dir
-  > work_dir=`$WORK_DIR/$CWD`
+- /root_dir
+  > root_dir=`$WORK_DIR/$CWD`
   - /runner.py
-  - /default_python (`executable=sys.executable`)
+  - /pids/
+  - /default_python
+    - python_path(`sys.executable`)
     - /venv1 (`requirements.txt < pip,six,morebuiltins`)
       - /workspaces/workspace1 (`code1.py, code2.py, package1/module.py`)
+        - > `sys.path.insert(0, workspace1)`
         - /jobs
           - /job1
             - /meta.json
@@ -48,5 +51,6 @@ Code runner with typing-hint. Less is more, simple is the best.
             - /result.log
               > ({"start": "2024-07-14 23:30:57", "end": "2024-07-14 23:33:57", "result": 321}\n)
       - /workspaces/workspace2 (`code3.py`)
-  - /default_python2 (`executable=/usr/bin/python3.11`)
+  - /default_python2
+    - python_path(`executable=/usr/bin/python3.11`)
     - /venv1 (`requirements.txt < requests,selectolax`)
