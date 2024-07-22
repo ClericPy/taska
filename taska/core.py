@@ -3,12 +3,15 @@ import json
 import logging
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import typing
 import venv
+from datetime import datetime
 from pathlib import Path
 
+from morebuiltins.date import Crontab
 from morebuiltins.utils import default_dict, is_running
 
 logger = logging.getLogger(__name__)
@@ -182,11 +185,30 @@ class JobDir(DirBase):
 
 
 class Taska:
+    SHUTDOWN = False
     TREE_LEVELS = [RootDir, PythonDir, VenvDir, WorkspaceDir, JobDir]
 
     def __init__(self, root_dir: typing.Union[Path, str]):
         self.root_dir = Path(root_dir).resolve()
         self.tree = self.init_dir_tree()
+        signal.signal(signalnum=signal.SIGINT, handler=self.handle_shutdown)
+
+    def handle_shutdown(self, *args):
+        self.__class__.SHUTDOWN = True
+
+    def need_run(self, now, cron):
+        for _ in Crontab.iter_datetimes(cron, start_date=now, max_tries=1):
+            return True
+        return False
+
+    def get_todos(self) -> typing.List[Path]:
+        result = []
+        now = datetime.now()
+        for path in self.root_dir.rglob("meta.json"):
+            job = json.loads(path.read_text(encoding="utf-8"))
+            if job["enable"] and job["crontab"] and self.need_run(now, job["crontab"]):
+                result.append(path)
+        return result
 
     def init_dir_tree(self):
         result = {}
@@ -198,10 +220,10 @@ class Taska:
                         venv_result = py_result.setdefault(v.name, {})
                         for w in v.joinpath("workspaces").iterdir():
                             if WorkspaceDir.is_valid(w):
-                                w_result = venv_result.setdefault(w.name, [])
+                                w_result = venv_result.setdefault(w.name, {})
                                 for j in w.joinpath("jobs").iterdir():
                                     if JobDir.is_valid(j):
-                                        w_result.append(j.name)
+                                        w_result[j.name] = None
         return result
 
     @classmethod
@@ -288,6 +310,10 @@ def test():
     Taska.prepare_default_env(root_dir, force=False)
     ta = Taska(root_dir)
     print(ta.tree)
+    print(ta.get_todos())
+    print(datetime.now())
+    for path in ta.get_todos():
+        print(ta.launch_job(path))
 
 
 if __name__ == "__main__":
