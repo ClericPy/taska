@@ -10,7 +10,7 @@ import sys
 import time
 import typing
 import venv
-from datetime import datetime
+from datetime import datetime, timedelta
 from hashlib import md5
 from pathlib import Path
 
@@ -225,16 +225,24 @@ class Taska:
         signal.signal(signalnum=signal.SIGTERM, handler=self.handle_shutdown)
 
     def run_forever(self):
+        current_min = time.strftime("%M")
+        next_min = (datetime.now() + timedelta(minutes=1)).replace(
+            second=0, microsecond=0
+        )
         logger.warning(
             f"[Start] Program start, pid={os.getpid()}, root_dir={self.root_dir.resolve().as_posix()}"
         )
-        current_min = time.strftime("%M")
         while not self.SHUTDOWN:
-            time.sleep(1)
             _min = time.strftime("%M")
             if _min != current_min:
                 current_min = _min
                 self.run_once()
+                next_min = (datetime.now() + timedelta(minutes=1)).replace(
+                    second=0, microsecond=0
+                )
+            timeleft = next_min.timestamp() - time.time()
+            interval = min((1, timeleft))
+            time.sleep(interval)
         logger.warning("[End] Program shutdown")
 
     def run_once(self):
@@ -253,8 +261,10 @@ class Taska:
             return True
         return False
 
-    def get_todos(self) -> typing.Iterator[typing.Tuple[Job, Path]]:
-        now = datetime.now()
+    def get_todos(
+        self, now: typing.Optional[datetime] = None
+    ) -> typing.Iterator[typing.Tuple[Job, Path]]:
+        now = now or datetime.now()
         for path in self.root_dir.rglob("meta.json"):
             job = json.loads(path.read_text(encoding="utf-8"))
             if job["enable"] and job["crontab"] and self.need_run(now, job["crontab"]):
