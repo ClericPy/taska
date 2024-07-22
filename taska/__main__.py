@@ -12,6 +12,8 @@ def main():
     parser.add_argument("--log-file", default="", dest="log_file")
     parser.add_argument("--rm-dir", default="", dest="rm_dir")
     parser.add_argument("--launch-job", default="", dest="launch_job")
+    parser.add_argument("--ignore-default", action="store_true", dest="ignore_default")
+    parser.add_argument("--app-handler", default="", dest="app_handler")
     args = parser.parse_args()
     Config.LOG_STREAM = args.stream_log
     if args.log_file:
@@ -29,8 +31,11 @@ def main():
     if not root_path.exists():
         print("Created:", root_path, flush=True)
         root_path.mkdir(parents=True, exist_ok=True)
-        Taska.prepare_default_env(root_path)
+        if not args.ignore_default:
+            Taska.prepare_default_env(root_path)
     # run app
+    if args.app_handler == 'bottle':
+        from taska.bottle_app.app import main
 
 
 if __name__ == "__main__":
