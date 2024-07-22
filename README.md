@@ -13,7 +13,10 @@ Code runner with typing-hint. Less is more, simple is the best.
   - /pids/
   - /default_python
     - python_path(`sys.executable`)
-    - /venv1 (`requirements.txt < pip,six,morebuiltins`)
+    - /venv1
+      - requirements.md5
+      - requirements.txt
+        - morebuiltins
       - /workspaces/workspace1 (`code1.py, code2.py, package1/module.py`)
         - > `sys.path.insert(0, workspace1)`
         - /jobs
@@ -53,4 +56,8 @@ Code runner with typing-hint. Less is more, simple is the best.
       - /workspaces/workspace2 (`code3.py`)
   - /default_python2
     - python_path(`executable=/usr/bin/python3.11`)
-    - /venv1 (`requirements.txt < requests,selectolax`)
+    - /venv2
+      - requirements.md5
+      - requirements.txt
+        - requests
+        - selectolax
