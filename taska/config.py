@@ -8,12 +8,12 @@ class Config:
     SHUTDOWN = False
 
     LOG_STREAM = True
-    LOG_FILE = None
+    LOG_DIR = None
     LOG_LEVEL = logging.DEBUG
 
     @classmethod
     def init_logger(cls):
-        logger = logging.getLogger(__name__)
+        logger = logging.getLogger("taska")
         if not logger.hasHandlers():
             logger.setLevel(cls.LOG_LEVEL)
             fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
@@ -22,8 +22,8 @@ class Config:
                 stream_handler.setLevel(cls.LOG_LEVEL)
                 stream_handler.setFormatter(fmt)
                 logger.addHandler(stream_handler)
-            if cls.LOG_FILE:
-                path = Path(cls.LOG_FILE).resolve()
+            if cls.LOG_DIR:
+                path = Path(cls.LOG_DIR).joinpath("app.log").resolve()
                 path.parent.mkdir(parents=True, exist_ok=True)
                 file_handler = SizedTimedRotatingFileHandler(
                     path.as_posix(),
