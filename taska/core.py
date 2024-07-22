@@ -1,6 +1,7 @@
 import abc
 import json
 import logging
+import os
 import re
 import shutil
 import signal
@@ -16,7 +17,7 @@ from pathlib import Path
 from morebuiltins.date import Crontab
 from morebuiltins.utils import default_dict, is_running
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("taska")
 
 
 class Job(typing.TypedDict):
@@ -221,8 +222,12 @@ class Taska:
         self.root_dir = Path(root_dir).resolve()
         self.tree = self.init_dir_tree()
         signal.signal(signalnum=signal.SIGINT, handler=self.handle_shutdown)
+        signal.signal(signalnum=signal.SIGTERM, handler=self.handle_shutdown)
 
     def run_forever(self):
+        logger.warning(
+            f"[Start] Program start, pid={os.getpid()}, root_dir={self.root_dir.resolve().as_posix()}"
+        )
         current_min = time.strftime("%M")
         while not self.SHUTDOWN:
             time.sleep(1)
@@ -230,15 +235,18 @@ class Taska:
             if _min != current_min:
                 current_min = _min
                 self.run_once()
-        raise RuntimeError("SHUTDOWN")
+        logger.warning("[End] Program shutdown")
 
     def run_once(self):
         for job, path in self.get_todos():
-            logger.info(f"[Start] Launch job {job['name']} {path.resolve().as_posix()}")
+            logger.info(
+                f"[Launch] Launch job `{job['name']}`: {path.resolve().as_posix()}"
+            )
             self.launch_job(path)
 
     def handle_shutdown(self, *args):
         self.__class__.SHUTDOWN = True
+        logger.warning(f"[Shutdown] received shutdown signal: {args[0]}")
 
     def need_run(self, now, cron):
         for _ in Crontab.iter_datetimes(cron, start_date=now, max_tries=1):
