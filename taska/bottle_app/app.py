@@ -1,8 +1,10 @@
+import shutil
 import time
 import typing
 from collections import defaultdict
 from hashlib import md5
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from bottle import Bottle, HTTPError, HTTPResponse, redirect, request, response
 from morebuiltins.functools import lru_cache_ttl
@@ -143,7 +145,7 @@ def error404(error):
 
 @app.get("/")
 def home():
-    redirect("/view//")
+    return ""
 
 
 @app.get("/login")
@@ -216,10 +218,10 @@ def get_list_html(path: Path):
         for path in path_list:
             p = path.relative_to(Config.root_path).as_posix()
             if path.is_dir():
-                html += f"<button>Delete</button> <a style='color:darkorange' href='/view/{p}'>&#128194; {path.name}/</a><br>"
+                html += f"<button onclick='delete_path(`{request.url}?delete={quote_plus(path.name)}`)'>Delete</button></a> <a style='color:darkorange' href='/view/{p}'>&#128194; {path.name}/</a><br>"
             else:
                 stat = f"<span style='color:gray;font-size: 0.8em'>({read_size(path.stat().st_size, 1)}|{ttime(path.stat().st_mtime)})</span>"
-                html += f"<button>Delete</button> <a style='color:black' href='/view/{p}'>&#128196; {path.name}</a> {stat}<br>"
+                html += f"<button onclick='delete_path(`{request.url}?delete={quote_plus(path.name)}`)'>Delete</button></a> <a style='color:black' href='/view/{p}'>&#128196; {path.name}</a> {stat}<br>"
         html += """<hr><form action="/upload" method="post" enctype="multipart/form-data">
         <input type="hidden" name="path" value="{path}">
         File Name:
@@ -236,8 +238,13 @@ def get_list_html(path: Path):
         if path.stat().st_size < Config.max_file_size:
             text = path.read_bytes().decode("utf-8", "replace")
             html += f"<hr><textarea style='width:100%;height:80%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'>{text}</textarea>"
-
-    return f"<body style='width:80%;margin: 0 auto;'>{html}</body>"
+    delete_code = r'''<script>function delete_path(url){
+    var isConfirmed = confirm('Are you sure you want to delete this item?');
+    if (isConfirmed) {
+        window.location.href = url;
+    }
+    }</script>'''
+    return f"<body style='width:80%;margin: 0 auto;'>{html}{delete_code}</body>"
 
 
 @app.get("/view/<path:path>")
@@ -248,6 +255,14 @@ def list_dir(path):
     path: Path = root.joinpath(path).resolve()
     if not (path.exists() and path.is_relative_to(root)):
         return "path not found"
+    delete = request.query.get("delete")
+    if delete:
+        target = path.joinpath(delete).resolve()
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        redirect(request.path)
     return get_list_html(path)
 
 
