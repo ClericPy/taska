@@ -6,7 +6,15 @@ from hashlib import md5
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from bottle import Bottle, HTTPError, HTTPResponse, redirect, request, response
+from bottle import (
+    Bottle,
+    HTTPError,
+    HTTPResponse,
+    redirect,
+    request,
+    response,
+    static_file,
+)
 from morebuiltins.functools import lru_cache_ttl
 from morebuiltins.utils import read_size, ttime
 
@@ -211,39 +219,45 @@ def get_list_html(path: Path):
             html += f" <a style='color:blue' href='/view/{p}'>{part}</a> /"
     html.rstrip("/")
     html += "<hr>"
+    path_arg = "/".join(parts[1:])
+    text_arg = ""
+    file_name_arg = ""
     if path.is_dir():
         path_list = sorted(
             path.iterdir(), key=lambda i: f"-{i.name}" if i.is_dir() else i.name
         )
-        for path in path_list:
-            p = path.relative_to(Config.root_path).as_posix()
-            if path.is_dir():
-                html += f"<button onclick='delete_path(`{request.url}?delete={quote_plus(path.name)}`)'>Delete</button></a> <a style='color:darkorange' href='/view/{p}'>&#128194; {path.name}/</a><br>"
+        for _path in path_list:
+            p = _path.relative_to(Config.root_path).as_posix()
+            if _path.is_dir():
+                color = "darkorange"
+                icon = "&#128194;"
             else:
-                stat = f"<span style='color:gray;font-size: 0.8em'>({read_size(path.stat().st_size, 1)}|{ttime(path.stat().st_mtime)})</span>"
-                html += f"<button onclick='delete_path(`{request.url}?delete={quote_plus(path.name)}`)'>Delete</button></a> <a style='color:black' href='/view/{p}'>&#128196; {path.name}</a> {stat}<br>"
-        html += """<hr><form action="/upload" method="post" enctype="multipart/form-data">
-        <input type="hidden" name="path" value="{path}">
-        File Name:
-        <input type="text" name="file_name"> or <input type="file" name="upload_file"><br>
-        <textarea id="text" name="text" style='width:60%;height:50%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'></textarea>
-        <br>
-        <input type="submit" value="Upload" /></form>""".format(
-            path="/".join(parts[1:])
-        )
+                color = "black"
+                icon = "&#128196;"
+            stat = f"<span style='color:gray;font-size: 0.8em'> | {ttime(_path.stat().st_mtime)} | {read_size(_path.stat().st_size, 1): >8}</span>"
+            html += f"<button onclick='delete_path(`{request.url}?delete={quote_plus(_path.name)}`)'>Delete</button> | <a href='{request.url}?download={quote_plus(_path.name)}'><button>Download</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a><br>"
     else:
+        file_name_arg = path.name
         p = path.relative_to(Config.root_path).as_posix()
         stat = f"<span style='color:gray;font-size: 0.8em'>({read_size(path.stat().st_size, 1)}|{ttime(path.stat().st_mtime)})</span>"
         html += f"<a style='color:black' href='/view/{p}'>{p}</a> {stat}<br>"
         if path.stat().st_size < Config.max_file_size:
-            text = path.read_bytes().decode("utf-8", "replace")
-            html += f"<hr><textarea style='width:100%;height:80%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'>{text}</textarea>"
-    delete_code = r'''<script>function delete_path(url){
+            text_arg = path.read_bytes().decode("utf-8", "replace")
+    html += """<hr><form action="/upload" method="post" enctype="multipart/form-data">
+<input type="hidden" name="path" value="{path_arg}">
+File Name:
+<input type="text" name="file_name" value="{file_name_arg}"> or <input type="file" name="upload_file"><br>
+<textarea id="text" name="text" style='width:60%;height:50%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'>{text_arg}</textarea>
+<br>
+<input type="submit" value="Upload" /></form>""".format(
+        path_arg=path_arg, file_name_arg=file_name_arg, text_arg=text_arg
+    )
+    delete_code = r"""<script>function delete_path(url){
     var isConfirmed = confirm('Are you sure you want to delete this item?');
     if (isConfirmed) {
         window.location.href = url;
     }
-    }</script>'''
+    }</script>"""
     return f"<body style='width:80%;margin: 0 auto;'>{html}{delete_code}</body>"
 
 
@@ -258,11 +272,32 @@ def list_dir(path):
     delete = request.query.get("delete")
     if delete:
         target = path.joinpath(delete).resolve()
+        if not target.parent.is_relative_to(root):
+            return "path not found"
         if target.is_dir():
             shutil.rmtree(target)
         else:
             target.unlink()
         redirect(request.path)
+    download = request.query.get("download")
+    if download:
+        target = path.joinpath(download).resolve()
+        if not target.exists():
+            return HTTPError(400, "path not found")
+        elif not target.is_relative_to(root):
+            return HTTPError(400, "bad path")
+        elif target.is_dir():
+            return HTTPError(400, "not support download dir")
+        else:
+            content_type = "application/octet-stream"
+            file_content = static_file(
+                target.as_posix(), target.parent.as_posix(), content_type
+            )
+            response.headers["Content-Disposition"] = (
+                f'attachment; filename="{target.name}"'
+            )
+            response.body = file_content
+            return response
     return get_list_html(path)
 
 
@@ -273,28 +308,25 @@ def upload():
     text = request.forms.get("text")
     path = request.forms.get("path")
     target_dir = Config.root_path.joinpath(request.forms.get("path"))
+    if target_dir.is_file() and target_dir.name == file_name:
+        target_dir = target_dir.parent
     if not target_dir.is_dir() or not target_dir.is_relative_to(Config.root_path):
         return HTTPError(400, "bad path")
     if upload_file.raw_filename:
-        if text:
-            return HTTPError(400, "file_name and file can not be set at the same time")
+        file_name = file_name or upload_file.raw_filename
         upload_file.save(
-            target_dir.joinpath(file_name or upload_file.raw_filename)
-            .resolve()
-            .as_posix(),
+            target_dir.joinpath(file_name).resolve().as_posix(),
             overwrite=True,
         )
         upload_file.file.close()
     elif text:
         if not file_name:
             return HTTPError(400, "file_name must be set if text is not null")
-        # path.parent.mkdir(parents=True, exist_ok=True)
-        # path.write_text(text)
         target_file = target_dir.joinpath(file_name).resolve()
         if not target_file.is_relative_to(Config.root_path):
             return HTTPError(400, "bad path")
         target_file.parent.mkdir(parents=True, exist_ok=True)
-        target_file.write_text(text)
+        target_file.write_text(text, encoding="utf-8", newline="")
     else:
         return HTTPError(400, "text or file must be set")
     redirect(f"/view/{path}")
