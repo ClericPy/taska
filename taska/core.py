@@ -51,6 +51,13 @@ class DirBase(abc.ABC):
     def is_valid(cls, path: Path):
         raise NotImplementedError()
 
+    @classmethod
+    def get_dir_type(cls, path: Path, default="Dir"):
+        for d in [RootDir, PythonDir, VenvDir, WorkspaceDir, JobDir]:
+            if d.is_valid(path):
+                return d.__name__.replace("Dir", "")
+        return default
+
 
 class RootDir(DirBase):
     @classmethod

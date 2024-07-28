@@ -6,13 +6,22 @@ from pathlib import Path
 
 from bottle import Bottle, HTTPError, HTTPResponse, redirect, request, response
 from morebuiltins.functools import lru_cache_ttl
+from morebuiltins.utils import read_size, ttime
 
 app = Bottle()
+
+# import sys
+
+# sys.path.append("../../")
+# from taska.core import DirBase
 
 
 class Config:
     pwd = ""
     salt = md5(Path(__file__).read_bytes()).hexdigest()
+    root_path = Path.cwd()
+    # file size limit
+    max_file_size = 1024 * 16
 
 
 class AuthPlugin(object):
@@ -134,7 +143,7 @@ def error404(error):
 
 @app.get("/")
 def home():
-    return "ok"
+    redirect("/view//")
 
 
 @app.get("/login")
@@ -155,11 +164,11 @@ def login():
 /login (input/reset password)
     /login
 / (index)
-    /list/root
+    /view/root
 
-/list/{path} (index)
+/view/{path} (index)
     root, python, venv, workspace, job
-    /list/demo_path/default/venv1/workspace1/job1
+    /view/demo_path/default/venv1/workspace1/job1
         meta.json
         ...
     /api/upload/{file}
@@ -187,19 +196,99 @@ def login():
 """
 
 
-@app.get("/root/<path:path>")
+def get_list_html(path: Path):
+    # text = path.read_bytes().decode("utf-8", "replace")
+    # return f"{path.name}<hr><pre contenteditable style='border: groove;padding: 2em;font-size: 1.5em;'>{text}</pre>"
+    html = ""
+    parts = path.relative_to(Config.root_path.parent).parts
+    for index, part in enumerate(parts):
+        if index == 0:
+            html += f" <a style='color:blue' href='/view//'>{part}</a> /"
+        else:
+            p = "/".join(parts[1 : index + 1])
+            html += f" <a style='color:blue' href='/view/{p}'>{part}</a> /"
+    html.rstrip("/")
+    html += "<hr>"
+    if path.is_dir():
+        path_list = sorted(
+            path.iterdir(), key=lambda i: f"-{i.name}" if i.is_dir() else i.name
+        )
+        for path in path_list:
+            p = path.relative_to(Config.root_path).as_posix()
+            if path.is_dir():
+                html += f"<button>Delete</button> <a style='color:darkorange' href='/view/{p}'>&#128194; {path.name}/</a><br>"
+            else:
+                stat = f"<span style='color:gray;font-size: 0.8em'>({read_size(path.stat().st_size, 1)}|{ttime(path.stat().st_mtime)})</span>"
+                html += f"<button>Delete</button> <a style='color:black' href='/view/{p}'>&#128196; {path.name}</a> {stat}<br>"
+        html += """<hr><form action="/upload" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="path" value="{path}">
+        File Name:
+        <input type="text" name="file_name"> or <input type="file" name="upload_file"><br>
+        <textarea id="text" name="text" style='width:60%;height:50%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'></textarea>
+        <br>
+        <input type="submit" value="Upload" /></form>""".format(
+            path="/".join(parts[1:])
+        )
+    else:
+        p = path.relative_to(Config.root_path).as_posix()
+        stat = f"<span style='color:gray;font-size: 0.8em'>({read_size(path.stat().st_size, 1)}|{ttime(path.stat().st_mtime)})</span>"
+        html += f"<a style='color:black' href='/view/{p}'>{p}</a> {stat}<br>"
+        if path.stat().st_size < Config.max_file_size:
+            text = path.read_bytes().decode("utf-8", "replace")
+            html += f"<hr><textarea style='width:100%;height:80%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'>{text}</textarea>"
+
+    return f"<body style='width:80%;margin: 0 auto;'>{html}</body>"
+
+
+@app.get("/view/<path:path>")
 def list_dir(path):
-    root = app.root_path
-    path = root.joinpath(path)
-    if not str(path.is_dir() and path.is_relative_to(root)):
-        raise HTTPError(404, "Not found")
-    return [i.name if i.is_file() else f"{i.name}/" for i in path.iterdir()]
+    if path == "/":
+        path = ""
+    root = Config.root_path
+    path: Path = root.joinpath(path).resolve()
+    if not (path.exists() and path.is_relative_to(root)):
+        return "path not found"
+    return get_list_html(path)
+
+
+@app.post("/upload")
+def upload():
+    file_name = request.forms.get("file_name")
+    upload_file = request.files.get("upload_file")
+    text = request.forms.get("text")
+    path = request.forms.get("path")
+    target_dir = Config.root_path.joinpath(request.forms.get("path"))
+    if not target_dir.is_dir() or not target_dir.is_relative_to(Config.root_path):
+        return HTTPError(400, "bad path")
+    if upload_file.raw_filename:
+        if text:
+            return HTTPError(400, "file_name and file can not be set at the same time")
+        upload_file.save(
+            target_dir.joinpath(file_name or upload_file.raw_filename)
+            .resolve()
+            .as_posix(),
+            overwrite=True,
+        )
+        upload_file.file.close()
+    elif text:
+        if not file_name:
+            return HTTPError(400, "file_name must be set if text is not null")
+        # path.parent.mkdir(parents=True, exist_ok=True)
+        # path.write_text(text)
+        target_file = target_dir.joinpath(file_name).resolve()
+        if not target_file.is_relative_to(Config.root_path):
+            return HTTPError(400, "bad path")
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        target_file.write_text(text)
+    else:
+        return HTTPError(400, "text or file must be set")
+    redirect(f"/view/{path}")
 
 
 def main(root_path="../../demo_path"):
-    app.install(AuthPlugin())
-    app.root_path = Path(root_path)
-    app.run(server="waitress")
+    # app.install(AuthPlugin())
+    Config.root_path = Path(root_path).resolve()
+    app.run(server="waitress", reload=True, debug=True)
 
 
 if __name__ == "__main__":
