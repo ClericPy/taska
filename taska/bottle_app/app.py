@@ -18,6 +18,8 @@ from bottle import (
 from morebuiltins.functools import lru_cache_ttl
 from morebuiltins.utils import read_size, ttime
 
+from ..core import Taska, JobDir
+
 app = Bottle()
 
 # import sys
@@ -207,8 +209,6 @@ def login():
 
 
 def get_list_html(path: Path):
-    # text = path.read_bytes().decode("utf-8", "replace")
-    # return f"{path.name}<hr><pre contenteditable style='border: groove;padding: 2em;font-size: 1.5em;'>{text}</pre>"
     html = ""
     parts = path.relative_to(Config.root_path.parent).parts
     for index, part in enumerate(parts):
@@ -217,29 +217,46 @@ def get_list_html(path: Path):
         else:
             p = "/".join(parts[1 : index + 1])
             html += f" <a style='color:blue' href='/view/{p}'>{part}</a> /"
-    html.rstrip("/")
-    html += "<hr>"
+    html = html.rstrip("/")
     path_arg = "/".join(parts[1:])
+    if JobDir.is_valid(path) or JobDir.is_valid(path.parent):
+        html += f" | <a style='color:red' href='/launch/{path_arg}'>Launch Job</a>"
+    html += "<hr>"
     text_arg = ""
     file_name_arg = ""
+    old_color = "#696969"
+    new_color = "#00c308"
+    now = time.time()
     if path.is_dir():
         path_list = sorted(
             path.iterdir(), key=lambda i: f"-{i.name}" if i.is_dir() else i.name
         )
         for _path in path_list:
             p = _path.relative_to(Config.root_path).as_posix()
+            mtime = _path.stat().st_mtime
             if _path.is_dir():
                 color = "darkorange"
                 icon = "&#128194;"
+                size = " - "
             else:
                 color = "black"
                 icon = "&#128196;"
-            stat = f"<span style='color:gray;font-size: 0.8em'> | {ttime(_path.stat().st_mtime)} | {read_size(_path.stat().st_size, 1): >8}</span>"
+                size = read_size(_path.stat().st_size, 1, shorten=True)
+            if now - mtime < 5 * 60:
+                stat_color = new_color
+            else:
+                stat_color = old_color
+            stat = f"<span style='color:{stat_color};width:200;display: inline-block;font-size: 0.8em'> | {ttime(mtime)} | {size}</span>"
             html += f"<button onclick='delete_path(`{request.url}?delete={quote_plus(_path.name)}`)'>Delete</button> | <a href='{request.url}?download={quote_plus(_path.name)}'><button>Download</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a><br>"
     else:
         file_name_arg = path.name
         p = path.relative_to(Config.root_path).as_posix()
-        stat = f"<span style='color:gray;font-size: 0.8em'>({read_size(path.stat().st_size, 1)}|{ttime(path.stat().st_mtime)})</span>"
+        mtime = path.stat().st_mtime
+        if now - mtime < 5 * 60:
+            stat_color = new_color
+        else:
+            stat_color = old_color
+        stat = f"<span style='color:{stat_color};font-size: 0.8em;width:200;display: inline-block;'> | {read_size(path.stat().st_size, 1)}|{ttime(mtime)}</span>"
         html += f"<a style='color:black' href='/view/{p}'>{p}</a> {stat}<br>"
         if path.stat().st_size < Config.max_file_size:
             text_arg = path.read_bytes().decode("utf-8", "replace")
@@ -259,6 +276,16 @@ File Name:
     }
     }</script>"""
     return f"<body style='width:80%;margin: 0 auto;'>{html}{delete_code}</body>"
+
+
+@app.route("/launch/<path:path>")
+def launch(path):
+    root = Config.root_path
+    _path: Path = root.joinpath(path).resolve()
+    if not (_path.exists() and _path.is_relative_to(root)):
+        return "path not found"
+    Taska.launch_job(_path)
+    return redirect(f"/view/{path}")
 
 
 @app.get("/view/<path:path>")

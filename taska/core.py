@@ -327,14 +327,16 @@ class Taska:
     @classmethod
     def launch_job(cls, job_path_or_dir: typing.Union[Path, str]):
         job_path = Path(job_path_or_dir).resolve()
-        if job_path.is_dir():
+        if job_path.is_dir() and (job_path / "meta.json").is_file():
             job_dir = job_path
             # job dir -> job meta file
             job_path = job_dir / "meta.json"
-        elif job_path.is_file():
+        elif job_path.is_file() and job_path.name == "meta.json":
             job_dir = job_path.parent
         else:
             raise FileNotFoundError(job_path)
+        if not JobDir.is_valid(job_path):
+            raise FileNotFoundError
         workspace_dir = job_dir.parent.parent
         venv_dir = workspace_dir.parent.parent
         runner_path = venv_dir.parent.parent / "runner.py"
@@ -345,7 +347,7 @@ class Taska:
             executable = venv_dir / "bin" / "python"
         cmd = [executable.as_posix(), runner_path.as_posix()]
         if sys.platform == "win32":
-            return subprocess.Popen(
+            proc = subprocess.Popen(
                 cmd,
                 creationflags=subprocess.DETACHED_PROCESS
                 | subprocess.CREATE_NEW_PROCESS_GROUP
@@ -354,7 +356,8 @@ class Taska:
                 cwd=job_dir.as_posix(),
             )
         else:
-            return subprocess.Popen(cmd, start_new_session=True, cwd=job_dir.as_posix())
+            proc = subprocess.Popen(cmd, start_new_session=True, cwd=job_dir.as_posix())
+        setattr(proc, "_child_created", False)
 
     @classmethod
     def safe_rm_dir(cls, path: typing.Union[Path, str]):
