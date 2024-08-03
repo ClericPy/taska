@@ -16,7 +16,7 @@ from bottle import (
     static_file,
 )
 from morebuiltins.functools import lru_cache_ttl
-from morebuiltins.utils import get_hash, read_size, ttime
+from morebuiltins.utils import get_hash, read_size, read_time, ttime
 
 from ..core import JobDir, Taska
 
@@ -151,7 +151,48 @@ class AuthPlugin(object):
 
 @app.get("/")
 def home():
-    return ""
+    # 1. console
+    # 2. view
+    return r"""
+<style>
+button{
+    list-style-type: none;
+    display: inline-block;
+    vertical-align: middle;
+    border: 1px solid #d4d4d4;
+    font-size: 3em;
+    color: #666666;
+    text-shadow: 0 1px 1px white;
+    margin: 5;
+    text-decoration: none;
+    text-align: center;
+    box-shadow: inset 0px 1px 1px rgba(255, 255, 255, 0.5), 0px 1px 2px rgba(0, 0, 0, 0.2);
+    width: 100%;
+    line-height: 30%;
+    height: 30%;
+    padding: 0px;
+    border-width: 4px;
+    background: -webkit-linear-gradient(top, #ffffff, #dcdcdc);
+}
+button:hover{
+    background: -webkit-linear-gradient(top, #dcdcdc, #ffffff);
+}
+</style>
+<body style='width: 50%;height: 100%;margin: 0 auto;'>
+<a href='/view//'><button>Dirs & Files</button></a>
+<a href='/console'><button>Console</button></a>
+</body>
+"""
+
+
+@app.get("/favicon.ico")
+def favico():
+    response.body = '<svg xmlns="http://www.w3.org/2000/svg"  viewBox="0 0 128 128" width="64px" height="64px"><path fill="#F7F7FB" d="M64 9A55 55 0 1 0 64 119A55 55 0 1 0 64 9Z"/><path fill="#DEDFE6" d="M64,9C33.6,9,9,33.6,9,64s24.6,55,55,55s55-24.6,55-55S94.4,9,64,9z M64,105.2c-22.8,0-41.2-18.5-41.2-41.2S41.2,22.8,64,22.8s41.2,18.5,41.2,41.2S86.8,105.2,64,105.2z"/><path fill="#D8D7D5" d="M64 59.4A4.6 4.6 0 1 0 64 68.6A4.6 4.6 0 1 0 64 59.4Z"/><path fill="#464C55" d="M64,122C32,122,6,96,6,64S32,6,64,6s58,26,58,58S96,122,64,122z M64,12c-28.7,0-52,23.3-52,52s23.3,52,52,52s52-23.3,52-52S92.7,12,64,12z"/><path fill="#464C55" d="M64.1,67.1c-0.8,0-1.5-0.3-2.1-0.9s-0.9-1.3-0.9-2.1L61,36.5c0-1.7,1.3-3,3-3l0,0c1.7,0,3,1.3,3,3l0.1,24.6L82.3,61l0,0c1.6,0,3,1.3,3,3c0,1.7-1.3,3-3,3L64.1,67.1L64.1,67.1z"/><path fill="#464C55" d="M64,71.6c-4.2,0-7.6-3.4-7.6-7.6s3.4-7.6,7.6-7.6s7.6,3.4,7.6,7.6S68.2,71.6,64,71.6z M64,62.4c-0.9,0-1.6,0.7-1.6,1.6c0,0.9,0.7,1.6,1.6,1.6c0.9,0,1.6-0.7,1.6-1.6S64.9,62.4,64,62.4z"/></svg>'
+    _md5 = get_hash(response.body)
+    response.headers["Cache-Control"] = "public, max-age=%s" % 3600 * 24
+    response.add_header("ETag", _md5)
+    response.add_header("Content-Type", "image/svg+xml")
+    return response
 
 
 @app.get("/login")
@@ -168,39 +209,6 @@ def login():
     </form>""".format(placeholder=placeholder)
 
 
-"""
-/login (input/reset password)
-    /login
-/ (index)
-    /view/root
-
-/view/{path} (index)
-    root, python, venv, workspace, job
-    /view/demo_path/default/venv1/workspace1/job1
-        meta.json
-        ...
-    /api/upload/{file}
-/api/prepare/{path}
-    root, python, venv, workspace, job
-
-/api/launch/{job_path}
-    /api/start/{job_path}
-/api/update/{job_path}?enable=1
-    /api/update/{job_path}?enable=0
-/api/stop/{job_path}?signal=15
-/api/kill/{job_path}?signal=9
-
-/api/delete/{path}
-
-/file/{path}?s={sign}&type=json
-    type: html, bin, text
-        import mimetypes
-        ('application/json', None)
-        ('text/x-python', None)
-        ('video/mp4', None)
-"""
-
-
 def get_list_html(path: Path):
     html = ""
     parts = path.relative_to(Config.root_path.parent).parts
@@ -212,9 +220,11 @@ def get_list_html(path: Path):
             html += f" <a style='color:blue' href='/view/{p}'>{part}</a> /"
     html = html.rstrip("/")
     path_arg = "/".join(parts[1:])
-    if JobDir.is_valid(path):
-        html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=3'>Launch Job</a>"
-    elif path.name == "meta.json" and JobDir.is_valid(path.parent):
+    if (
+        JobDir.is_valid(path)
+        or path.name == "meta.json"
+        and JobDir.is_valid(path.parent)
+    ):
         html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=3'>Launch Job</a>"
     html += "<hr>"
     text_arg = ""
@@ -242,8 +252,11 @@ def get_list_html(path: Path):
                     stat_color = new_color
                 else:
                     stat_color = old_color
-            stat = f"<span style='color:{stat_color};width:200;display: inline-block;font-size: 0.8em'> | {ttime(mtime)} | {size}</span>"
-            html += f"<button onclick='delete_path(`{request.url}/{quote_plus(_path.name)}?delete=1`)'>Delete</button> | <a href='{request.url}?download={quote_plus(_path.name)}'><button{' disabled' if _path.is_dir() else ''}>Download</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a><br>"
+            time_stat = f"{ttime(mtime)}({read_time(now-mtime, shorten=True):->8})"
+            stat = f"<span style='color:{stat_color};width:260px;display: inline-block;font-size: 0.8em'> | {time_stat} | {size}</span>"
+            file_url = f"{request.url.rstrip('/')}/{quote_plus(_path.name)}"
+            dir_disabled = " disabled" if _path.is_dir() else ""
+            html += f"<button onclick='delete_path(`{file_url}?action=delete`)'>Delete</button> | <a href='{file_url}?action=download'><button{dir_disabled}>Download</button></a> | <a href='{file_url}?action=view'><button{dir_disabled}>View</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a><br>"
     else:
         file_name_arg = path.name
         p = path.relative_to(Config.root_path).as_posix()
@@ -253,17 +266,18 @@ def get_list_html(path: Path):
         else:
             stat_color = old_color
         _path = path
-        stat = f"<span style='color:{stat_color};font-size: 0.8em;width:200;display: inline-block;'> | {read_size(path.stat().st_size, 1)}|{ttime(mtime)}</span>"
-        html += f"<button onclick='delete_path(`{request.url}/{quote_plus(_path.name)}?delete=1`)'>Delete</button> | <a href='{request.url}?download={quote_plus(_path.name)}'><button{' disabled' if _path.is_dir() else ''}>Download</button></a> <a style='color:black' href='/view/{p}'>{p}</a> {stat} <br>"
+        time_stat = f"{ttime(mtime)}({read_time(now-mtime, shorten=True):->8})"
+        stat = f"<span style='color:{stat_color};font-size: 0.8em;width:260px;display: inline-block;'> | {read_size(path.stat().st_size, 1)}|{time_stat}</span>"
+        html += f"<button onclick='delete_path(`{request.url}?action=delete`)'>Delete</button> | <a href='{request.url}?action=download'><button>Download</button></a> | <a href='{request.url}?action=view'><button>View</button></a> {stat} <br>"
         if path.stat().st_size < Config.max_file_size:
             text_arg = path.read_bytes().decode("utf-8", "replace")
     html += """<hr><form action="/upload" method="post" enctype="multipart/form-data">
 <input type="hidden" name="path" value="{path_arg}">
 File Name:
 <input type="text" name="file_name" value="{file_name_arg}"> or <input type="file" name="upload_file"><br>
-<textarea id="text" name="text" style='width:60%;height:50%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'>{text_arg}</textarea>
+<textarea id="text" name="text" style='width:100%;height:50%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'>{text_arg}</textarea>
 <br>
-<input type="submit" value="Upload" /></form>""".format(
+<input style="font-size: 1.5em;" type="submit" value="Upload" /></form>""".format(
         path_arg=path_arg, file_name_arg=file_name_arg, text_arg=text_arg
     )
     delete_code = r"""<script>function delete_path(url){
@@ -294,9 +308,10 @@ def list_dir(path):
         path = ""
     root = Config.root_path
     real_path: Path = root.joinpath(path).resolve()
+    action = request.query.get("action")
     if not (real_path.exists() and real_path.is_relative_to(root)):
         return "path not found"
-    elif request.query.get('delete'):
+    elif action == "delete":
         if not real_path.parent.is_relative_to(root):
             return "path not found"
         if real_path.is_dir():
@@ -304,28 +319,27 @@ def list_dir(path):
         else:
             real_path.unlink()
         redirect("/".join(request.path.split("/")[:-1]))
-    elif "download" in request.query:
-        download = request.query["download"]
-        if real_path.name == download:
-            target = real_path
-        else:
-            target = real_path.joinpath(download)
-        if not target.exists():
+    elif action == "download":
+        if not real_path.exists():
             return HTTPError(400, "path not found")
-        elif not target.is_relative_to(root):
+        elif not real_path.is_relative_to(root):
             return HTTPError(400, "bad path")
-        elif target.is_dir():
+        elif real_path.is_dir():
             return HTTPError(400, "not support download dir")
         else:
             content_type = "application/octet-stream"
             file_content = static_file(
-                target.as_posix(), target.parent.as_posix(), content_type
+                real_path.as_posix(), real_path.parent.as_posix(), content_type
             )
             response.headers["Content-Disposition"] = (
-                f'attachment; filename="{target.name}"'
+                f'attachment; filename="{real_path.name}"'
             )
             response.body = file_content
             return response
+    elif action == "view":
+        if real_path.is_file():
+            return real_path.read_bytes()
+        return "not a file"
     elif "tail" in request.query:
         return handle_tail(real_path, get_hash((time.time(), real_path.as_posix())))
 
@@ -410,7 +424,7 @@ def upload():
         target_file = target_dir.joinpath(file_name).resolve()
         if not target_file.is_relative_to(Config.root_path):
             return HTTPError(400, "bad path")
-        if file_name.endswith('/'):
+        if file_name.endswith("/"):
             target_file.mkdir(parents=True, exist_ok=True)
         else:
             target_file.parent.mkdir(parents=True, exist_ok=True)
