@@ -16,12 +16,13 @@ from bottle import (
     static_file,
 )
 from morebuiltins.functools import lru_cache_ttl
-from morebuiltins.utils import read_size, ttime
+from morebuiltins.utils import get_hash, read_size, ttime
 
-from ..core import Taska, JobDir
+from ..core import JobDir, Taska
 
 app = Bottle()
-
+keepalive_timeout = 60
+keepalives = {}
 # import sys
 
 # sys.path.append("../../")
@@ -219,8 +220,10 @@ def get_list_html(path: Path):
             html += f" <a style='color:blue' href='/view/{p}'>{part}</a> /"
     html = html.rstrip("/")
     path_arg = "/".join(parts[1:])
-    if JobDir.is_valid(path) or JobDir.is_valid(path.parent):
-        html += f" | <a style='color:red' href='/launch/{path_arg}'>Launch Job</a>"
+    if JobDir.is_valid(path):
+        html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=3'>Launch Job</a>"
+    elif path.name == "meta.json" and JobDir.is_valid(path.parent):
+        html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=3'>Launch Job</a>"
     html += "<hr>"
     text_arg = ""
     file_name_arg = ""
@@ -238,16 +241,17 @@ def get_list_html(path: Path):
                 color = "darkorange"
                 icon = "&#128194;"
                 size = " - "
+                stat_color = old_color
             else:
                 color = "black"
                 icon = "&#128196;"
                 size = read_size(_path.stat().st_size, 1, shorten=True)
-            if now - mtime < 5 * 60:
-                stat_color = new_color
-            else:
-                stat_color = old_color
+                if now - mtime < 5 * 60:
+                    stat_color = new_color
+                else:
+                    stat_color = old_color
             stat = f"<span style='color:{stat_color};width:200;display: inline-block;font-size: 0.8em'> | {ttime(mtime)} | {size}</span>"
-            html += f"<button onclick='delete_path(`{request.url}?delete={quote_plus(_path.name)}`)'>Delete</button> | <a href='{request.url}?download={quote_plus(_path.name)}'><button>Download</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a><br>"
+            html += f"<button onclick='delete_path(`{request.url}?delete={quote_plus(_path.name)}`)'>Delete</button> | <a href='{request.url}?download={quote_plus(_path.name)}'><button{' disabled' if _path.is_dir() else ''}>Download</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a><br>"
     else:
         file_name_arg = path.name
         p = path.relative_to(Config.root_path).as_posix()
@@ -284,8 +288,11 @@ def launch(path):
     _path: Path = root.joinpath(path).resolve()
     if not (_path.exists() and _path.is_relative_to(root)):
         return "path not found"
-    Taska.launch_job(_path)
-    return redirect(f"/view/{path}")
+    timeout = int(request.query.get("timeout", 0))
+    job_dir = Taska.launch_job(_path, timeout)
+    parts = job_dir.relative_to(Config.root_path.parent).parts
+    path_arg = "/".join(parts[1:])
+    return redirect(f"/view/{path_arg}")
 
 
 @app.get("/view/<path:path>")
@@ -293,12 +300,12 @@ def list_dir(path):
     if path == "/":
         path = ""
     root = Config.root_path
-    path: Path = root.joinpath(path).resolve()
-    if not (path.exists() and path.is_relative_to(root)):
+    real_path: Path = root.joinpath(path).resolve()
+    if not (real_path.exists() and real_path.is_relative_to(root)):
         return "path not found"
-    delete = request.query.get("delete")
-    if delete:
-        target = path.joinpath(delete).resolve()
+    elif "delete" in request.query:
+        delete = request.query["delete"]
+        target = real_path.joinpath(delete).resolve()
         if not target.parent.is_relative_to(root):
             return "path not found"
         if target.is_dir():
@@ -306,9 +313,9 @@ def list_dir(path):
         else:
             target.unlink()
         redirect(request.path)
-    download = request.query.get("download")
-    if download:
-        target = path.joinpath(download).resolve()
+    elif "download" in request.query:
+        download = request.query["download"]
+        target = real_path.joinpath(download).resolve()
         if not target.exists():
             return HTTPError(400, "path not found")
         elif not target.is_relative_to(root):
@@ -325,7 +332,64 @@ def list_dir(path):
             )
             response.body = file_content
             return response
-    return get_list_html(path)
+    elif "tail" in request.query:
+        return handle_tail(real_path, get_hash((time.time(), real_path.as_posix())))
+
+    else:
+        return get_list_html(real_path)
+
+
+def handle_tail(path: Path, event_id):
+    if not path.is_file():
+        raise ValueError("not a file")
+    tail = int(request.query["tail"])
+    encoding = request.query.get("encoding", "utf-8")
+    interval = int(request.query.get("interval", 1))
+    with open(path, "r", encoding=encoding) as f:
+        if tail:
+            for index, line in enumerate(f):
+                pass
+            min_index = index + 1 - tail
+            f.seek(0)
+            yield "<pre style='font-size: 1.5em;'>"
+            for index, line in enumerate(f):
+                if index >= min_index:
+                    yield line
+            yield "</pre>"
+        else:
+            keepalives[event_id] = int(time.time() + keepalive_timeout)
+            yield (
+                "<script> (function () { setInterval(() => document.readyState !== 'complete' && fetch('/keepalive?e=%s', { method: 'HEAD' }), %s); })()</script>"
+                % (event_id, (keepalive_timeout * 1000 // 2))
+            )
+            yield "<pre style='font-size: 1.5em;'>"
+            # tail -F
+            # end of file
+            f.seek(path.stat().st_size)
+            while True:
+                line = f.readline()
+                if line:
+                    yield line
+                else:
+                    if time.time() > keepalives.get(event_id, 0):
+                        keepalives.pop(event_id, None)
+                        break
+                    elif path.stat().st_size < f.tell():
+                        f.seek(0)
+                    time.sleep(interval)
+            yield "</pre>"
+
+
+@app.route("/keepalive", method="HEAD")
+def keepalive():
+    if request.query.get("d"):
+        keepalives.pop(request.query["e"], None)
+    else:
+        now = int(time.time())
+        keepalives[request.query["e"]] = now + keepalive_timeout
+    for k, v in list(keepalives.items()):
+        if now > v:
+            keepalives.pop(k, None)
 
 
 @app.post("/upload")
@@ -346,7 +410,7 @@ def upload():
             overwrite=True,
         )
         upload_file.file.close()
-    elif text:
+    else:
         if not file_name:
             return HTTPError(400, "file_name must be set if text is not null")
         target_file = target_dir.joinpath(file_name).resolve()
@@ -354,17 +418,10 @@ def upload():
             return HTTPError(400, "bad path")
         target_file.parent.mkdir(parents=True, exist_ok=True)
         target_file.write_text(text, encoding="utf-8", newline="")
-    else:
-        return HTTPError(400, "text or file must be set")
     redirect(f"/view/{path}")
 
 
-def main(root_path="../../demo_path"):
+def main(root_path, debug=False):
     # app.install(AuthPlugin())
     Config.root_path = Path(root_path).resolve()
-    app.run(server="waitress", reload=True, debug=True)
-
-
-if __name__ == "__main__":
-    main()
-# demo_path\default\venv1\workspaces\workspace1\jobs\test
+    app.run(server="waitress", reload=True, debug=debug)

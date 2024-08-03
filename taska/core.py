@@ -325,7 +325,7 @@ class Taska:
         return root_dir, python_dir, venv_dir, workspace_dir, job_dir
 
     @classmethod
-    def launch_job(cls, job_path_or_dir: typing.Union[Path, str]):
+    def launch_job(cls, job_path_or_dir: typing.Union[Path, str], timeout=0) -> Path:
         job_path = Path(job_path_or_dir).resolve()
         if job_path.is_dir() and (job_path / "meta.json").is_file():
             job_dir = job_path
@@ -335,7 +335,7 @@ class Taska:
             job_dir = job_path.parent
         else:
             raise FileNotFoundError(job_path)
-        if not JobDir.is_valid(job_path):
+        if not JobDir.is_valid(job_path.parent):
             raise FileNotFoundError
         workspace_dir = job_dir.parent.parent
         venv_dir = workspace_dir.parent.parent
@@ -358,6 +358,12 @@ class Taska:
         else:
             proc = subprocess.Popen(cmd, start_new_session=True, cwd=job_dir.as_posix())
         setattr(proc, "_child_created", False)
+        if timeout:
+            try:
+                proc.wait(timeout)
+            except subprocess.TimeoutExpired:
+                pass
+        return job_dir
 
     @classmethod
     def safe_rm_dir(cls, path: typing.Union[Path, str]):
