@@ -149,11 +149,6 @@ class AuthPlugin(object):
         return wrapper
 
 
-@app.error(404)
-def error404(error):
-    return HTTPResponse(status=303, headers={"Location": "/"})
-
-
 @app.get("/")
 def home():
     return ""
@@ -200,9 +195,6 @@ def login():
 /file/{path}?s={sign}&type=json
     type: html, bin, text
         import mimetypes
-        print(mimetypes.guess_type('1.json'))
-        print(mimetypes.guess_type(r'1.py'))
-        print(mimetypes.guess_type(r'1.mp4'))
         ('application/json', None)
         ('text/x-python', None)
         ('video/mp4', None)
@@ -251,7 +243,7 @@ def get_list_html(path: Path):
                 else:
                     stat_color = old_color
             stat = f"<span style='color:{stat_color};width:200;display: inline-block;font-size: 0.8em'> | {ttime(mtime)} | {size}</span>"
-            html += f"<button onclick='delete_path(`{request.url}?delete={quote_plus(_path.name)}`)'>Delete</button> | <a href='{request.url}?download={quote_plus(_path.name)}'><button{' disabled' if _path.is_dir() else ''}>Download</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a><br>"
+            html += f"<button onclick='delete_path(`{request.url}/{quote_plus(_path.name)}?delete=1`)'>Delete</button> | <a href='{request.url}?download={quote_plus(_path.name)}'><button{' disabled' if _path.is_dir() else ''}>Download</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a><br>"
     else:
         file_name_arg = path.name
         p = path.relative_to(Config.root_path).as_posix()
@@ -260,8 +252,9 @@ def get_list_html(path: Path):
             stat_color = new_color
         else:
             stat_color = old_color
+        _path = path
         stat = f"<span style='color:{stat_color};font-size: 0.8em;width:200;display: inline-block;'> | {read_size(path.stat().st_size, 1)}|{ttime(mtime)}</span>"
-        html += f"<a style='color:black' href='/view/{p}'>{p}</a> {stat}<br>"
+        html += f"<button onclick='delete_path(`{request.url}/{quote_plus(_path.name)}?delete=1`)'>Delete</button> | <a href='{request.url}?download={quote_plus(_path.name)}'><button{' disabled' if _path.is_dir() else ''}>Download</button></a> <a style='color:black' href='/view/{p}'>{p}</a> {stat} <br>"
         if path.stat().st_size < Config.max_file_size:
             text_arg = path.read_bytes().decode("utf-8", "replace")
     html += """<hr><form action="/upload" method="post" enctype="multipart/form-data">
@@ -303,19 +296,20 @@ def list_dir(path):
     real_path: Path = root.joinpath(path).resolve()
     if not (real_path.exists() and real_path.is_relative_to(root)):
         return "path not found"
-    elif "delete" in request.query:
-        delete = request.query["delete"]
-        target = real_path.joinpath(delete).resolve()
-        if not target.parent.is_relative_to(root):
+    elif request.query.get('delete'):
+        if not real_path.parent.is_relative_to(root):
             return "path not found"
-        if target.is_dir():
-            shutil.rmtree(target)
+        if real_path.is_dir():
+            shutil.rmtree(real_path)
         else:
-            target.unlink()
-        redirect(request.path)
+            real_path.unlink()
+        redirect("/".join(request.path.split("/")[:-1]))
     elif "download" in request.query:
         download = request.query["download"]
-        target = real_path.joinpath(download).resolve()
+        if real_path.name == download:
+            target = real_path
+        else:
+            target = real_path.joinpath(download)
         if not target.exists():
             return HTTPError(400, "path not found")
         elif not target.is_relative_to(root):
@@ -416,8 +410,11 @@ def upload():
         target_file = target_dir.joinpath(file_name).resolve()
         if not target_file.is_relative_to(Config.root_path):
             return HTTPError(400, "bad path")
-        target_file.parent.mkdir(parents=True, exist_ok=True)
-        target_file.write_text(text, encoding="utf-8", newline="")
+        if file_name.endswith('/'):
+            target_file.mkdir(parents=True, exist_ok=True)
+        else:
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            target_file.write_text(text, encoding="utf-8", newline="")
     redirect(f"/view/{path}")
 
 
