@@ -145,6 +145,8 @@ def start_job(entrypoint, params, workspace_dir, EXEC_GLOBAL_FUTURE: Future):
             code = f"import {module}"
             if function:
                 code += f"; EXEC_GLOBAL_FUTURE.set_result({module}.{function}(**RUNNER_PARAMS))"
+            else:
+                code += "; EXEC_GLOBAL_FUTURE.set_result('no result')"
             try:
                 exec(
                     code,
