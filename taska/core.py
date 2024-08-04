@@ -68,15 +68,18 @@ class RootDir(DirBase):
         logger.info(f"[Init] Creating root_dir: {root_dir.resolve().as_posix()}")
         root_dir.mkdir(parents=True, exist_ok=True)
         root_dir.joinpath("pids").mkdir(parents=True, exist_ok=True)
-        root_dir.joinpath("runner.py").write_bytes(
-            Path(__file__).parent.joinpath("./templates/runner.py").read_bytes()
-        )
+        runner_code = Path(__file__).parent.joinpath("templates/runner.py").read_bytes()
+        root_dir.joinpath("runner.py").write_bytes(runner_code)
+        root_dir.joinpath("max_workers").write_bytes(b"-1")
         assert cls.is_valid(root_dir)
         return root_dir.resolve()
 
     @classmethod
     def is_valid(cls, path: Path):
-        return path.joinpath("runner.py").is_file()
+        for name in ("runner.py", "pids", "max_workers"):
+            if not path.joinpath(name).exists():
+                return False
+        return True
 
 
 class PythonDir(DirBase):

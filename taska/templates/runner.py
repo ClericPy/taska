@@ -34,6 +34,10 @@ class SingletonError(RuntimeError):
     pass
 
 
+class MaxWorkersError(RuntimeError):
+    pass
+
+
 def read_size(text: str):
     # 1g, 1GB, 1g => 1024**3
     m = re.match(r"(\d+)([gGmMkK])?", str(text))
@@ -46,43 +50,33 @@ def read_size(text: str):
     return size
 
 
-def is_running_win32(pid: int):
-    with os.popen('tasklist /fo csv /fi "pid eq %s"' % int(pid)) as f:
-        f.readline()
-        text = f.readline()
-        return bool(text)
+def is_running(pid: int):
+    if sys.platform == "win32":
+        with os.popen('tasklist /fo csv /fi "pid eq %s"' % pid) as f:
+            f.readline()
+            text = f.readline().strip()
+            if text:
+                return pid
+    else:
+        try:
+            os.kill(pid, 0)
+            return pid
+        except OSError:
+            pass
+        except SystemError:
+            return pid
 
 
-def is_running_linux(pid: int):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except OSError:
-        return False
-    except SystemError:
-        return True
-
-
-def get_running_pid(pid_file: Path):
+def ensure_singleton(current_pid, pid_file: Path):
     if not pid_file.is_file():
         return
     old_pid = pid_file.read_text()
     if not old_pid:
         return
-    if sys.platform == "win32":
-        with os.popen('tasklist /fo csv /fi "pid eq %s"' % int(old_pid)) as f:
-            f.readline()
-            text = f.readline().strip()
-            if text:
-                return old_pid
-    else:
-        try:
-            os.kill(int(old_pid), 0)
-            return old_pid
-        except OSError:
-            pass
-        except SystemError:
-            return old_pid
+    if is_running(int(old_pid)):
+        raise SingletonError(
+            f"Job already running. pid: {current_pid}, running_pid: {old_pid}"
+        )
 
 
 def log_result(result_limit, result_item: dict, start_ts):
@@ -177,6 +171,18 @@ def start_job(entrypoint, params, workspace_dir, EXEC_GLOBAL_FUTURE: Future):
         )
 
 
+def ensure_max_workers(root_dir: Path):
+    max_workers = int(root_dir.joinpath("max_workers").read_text())
+    if max_workers > 0:
+        runnings = 0
+        for path in root_dir.joinpath("pids").iterdir():
+            pid = int(path.name)
+            if is_running(pid):
+                runnings += 1
+        if runnings >= max_workers:
+            raise MaxWorkersError(f"Runnings: {runnings}/{max_workers}")
+
+
 def main():
     """job_meta:
     {
@@ -209,14 +215,11 @@ def main():
     pid_file = cwd_path / "job.pid"
     global_pid_file = root_dir / "pids" / pid_str
     global_pid_file.parent.mkdir(parents=True, exist_ok=True)
-    global_pid_file.touch()
     try:
         thread = None
-        running_pid = get_running_pid(pid_file)
-        if running_pid:
-            raise SingletonError(
-                f"Job already running. pid: {pid_str}, running_pid: {running_pid}"
-            )
+        ensure_singleton(pid_str, pid_file)
+        ensure_max_workers(root_dir)
+        global_pid_file.touch()
         # start job
         pid_file.write_text(pid_str)
         setup_stdout_logger(cwd_path, stdout_limit)
