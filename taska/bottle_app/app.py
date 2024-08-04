@@ -18,7 +18,8 @@ from bottle import (
 from morebuiltins.functools import lru_cache_ttl
 from morebuiltins.utils import get_hash, read_size, read_time, ttime
 
-from ..core import JobDir, Taska
+from ..core import JobDir, PythonDir, Taska, VenvDir, WorkspaceDir
+from ..config import Config as MConfig
 
 app = Bottle()
 keepalive_timeout = 60
@@ -27,6 +28,7 @@ keepalives = {}
 
 # sys.path.append("../../")
 # from taska.core import DirBase
+logger = MConfig.init_logger()
 
 
 class Config:
@@ -150,7 +152,7 @@ class AuthPlugin(object):
 
 
 @app.get("/")
-def home():
+def index():
     # 1. console
     # 2. view
     return r"""
@@ -159,27 +161,34 @@ button{
     list-style-type: none;
     display: inline-block;
     vertical-align: middle;
+    zoom: 1;
     border: 1px solid #d4d4d4;
-    font-size: 3em;
-    color: #666666;
-    text-shadow: 0 1px 1px white;
-    margin: 5;
+    font-weight: bold;
+    font-family: "Helvetica Neue Light", "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
+    margin: 20% 50px 20% 50px;
     text-decoration: none;
     text-align: center;
+    border-radius: 60%;
     box-shadow: inset 0px 1px 1px rgba(255, 255, 255, 0.5), 0px 1px 2px rgba(0, 0, 0, 0.2);
-    width: 100%;
+    width: 300px;
     line-height: 30%;
     height: 30%;
     padding: 0px;
     border-width: 4px;
-    background: -webkit-linear-gradient(top, #ffffff, #dcdcdc);
+    font-size: 3em;
+    background: -webkit-linear-gradient(top, #00b5e5, #008db2);
+    background-color: #00a1cb;
+    border-color: #007998;
+    color: white;
+    text-shadow: 0 -1px 1px rgba(0, 40, 50, 0.35);
+    cursor: pointer;
 }
 button:hover{
-    background: -webkit-linear-gradient(top, #dcdcdc, #ffffff);
+    background: -webkit-linear-gradient(top, #dcdcdc, #189086);
 }
 </style>
 <body style='width: 50%;height: 100%;margin: 0 auto;'>
-<a href='/view//'><button>Dirs & Files</button></a>
+<a href='/view//'><button>Files</button></a>
 <a href='/console'><button>Console</button></a>
 </body>
 """
@@ -209,6 +218,26 @@ def login():
     </form>""".format(placeholder=placeholder)
 
 
+@app.get("/init/<dir_type>")
+def init(dir_type):
+    referer = request.query["referer"]
+    name = request.query.get("name")
+    root = Config.root_path
+    target_dir = root.joinpath(referer).resolve()
+    if not (target_dir.exists() and target_dir.is_relative_to(root)):
+        return "path not found"
+    if dir_type == "requirements":
+        return VenvDir.ensure_pip_install(target_dir)
+    c = {i.__name__: i for i in [JobDir, PythonDir, VenvDir, WorkspaceDir]}[dir_type]
+    if c is PythonDir:
+        python = request.query.get("python", "")
+        c.prepare_dir(target_dir, name, python=python)
+    else:
+        c.prepare_dir(target_dir, name)
+    referer = referer or "/"
+    return redirect(f"/view/{referer}")
+
+
 def get_list_html(path: Path):
     html = ""
     parts = path.relative_to(Config.root_path.parent).parts
@@ -220,12 +249,24 @@ def get_list_html(path: Path):
             html += f" <a style='color:blue' href='/view/{p}'>{part}</a> /"
     html = html.rstrip("/")
     path_arg = "/".join(parts[1:])
-    if (
-        JobDir.is_valid(path)
-        or path.name == "meta.json"
-        and JobDir.is_valid(path.parent)
-    ):
+    if JobDir.is_valid(path) or JobDir.is_valid(path.parent):
         html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=3'>Launch Job</a>"
+    elif path.is_dir():
+        if path == Config.root_path:
+            "create python dir"
+            html += f" | <form style='color:red' method='get' action='/init/{PythonDir.__name__}'><input placeholder='dir name' name='name'> <input placeholder='python_path' name='python'><input style='display:none' name='referer' value='{path_arg}' name='python'><input type='submit' value='Create PythonDir'></form>"
+        elif PythonDir.is_valid(path):
+            "create venv dir"
+            html += f" | <form style='color:red' method='get' action='/init/{VenvDir.__name__}'><input placeholder='dir name' name='name'><input style='display:none' name='referer' value='{path_arg}'><input type='submit' value='Create VenvDir'></form>"
+        elif VenvDir.is_valid(path):
+            "fresh requirements"
+            html += f" | <a style='color:red' target='_blank' href='/init/requirements?referer={path_arg}'>PIP install</a>"
+        elif VenvDir.is_valid(path.parent) and path.name == "workspaces":
+            "create workspace dir"
+            html += f" | <form style='color:red' method='get' action='/init/{WorkspaceDir.__name__}'><input placeholder='dir name' name='name'><input style='display:none' name='referer' value='{path_arg}'><input type='submit' value='Create WorkspaceDir'></form>"
+        elif WorkspaceDir.is_valid(path.parent) and path.name == "jobs":
+            "create job dir"
+            html += f" | <form style='color:red' method='get' action='/init/{JobDir.__name__}'><input placeholder='dir name' name='name'><input style='display:none' name='referer' value='{path_arg}'><input type='submit' value='Create JobDir'></form>"
     html += "<hr>"
     text_arg = ""
     file_name_arg = ""
@@ -318,7 +359,10 @@ def list_dir(path):
             shutil.rmtree(real_path)
         else:
             real_path.unlink()
-        redirect("/".join(request.path.split("/")[:-1]))
+        back = "/".join(request.path.split("/")[:-1])
+        if back == "/view":
+            return redirect("/view//")
+        redirect(back)
     elif action == "download":
         if not real_path.exists():
             return HTTPError(400, "path not found")
@@ -432,7 +476,22 @@ def upload():
     redirect(f"/view/{path}")
 
 
-def main(root_path, debug=False):
+@app.get("/console")
+def console():
+    root = Config.root_path
+    return ""
+
+
+@app.get("/create_default_dir")
+def create_default_dir():
+    root = Config.root_path
+    return ""
+
+
+def main(root_path, host="127.0.0.1", port=8021, debug=False):
     # app.install(AuthPlugin())
     Config.root_path = Path(root_path).resolve()
-    app.run(server="waitress", reload=True, debug=debug)
+    logger.warning(f"root_path: {Config.root_path}")
+    Taska.prepare_default_env(Config.root_path, force=False)
+    logger.warning(f"start server at {host}:{port}, debug={debug}")
+    app.run(server="waitress", host=host, port=port, debug=debug)

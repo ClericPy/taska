@@ -15,7 +15,7 @@ from hashlib import md5
 from pathlib import Path
 
 from morebuiltins.date import Crontab
-from morebuiltins.utils import default_dict, is_running
+from morebuiltins.utils import is_running
 
 logger = logging.getLogger("taska")
 
@@ -70,7 +70,9 @@ class RootDir(DirBase):
         root_dir.joinpath("pids").mkdir(parents=True, exist_ok=True)
         runner_code = Path(__file__).parent.joinpath("templates/runner.py").read_bytes()
         root_dir.joinpath("runner.py").write_bytes(runner_code)
-        root_dir.joinpath("max_workers").write_bytes(b"-1")
+        root_dir.joinpath("max_workers").write_text(
+            str(os.cpu_count()), encoding="utf-8"
+        )
         assert cls.is_valid(root_dir)
         return root_dir.resolve()
 
@@ -89,7 +91,7 @@ class PythonDir(DirBase):
         if not force and cls.is_valid(python_dir):
             return python_dir.resolve()
         logger.info(f"[Init] Creating python_dir: {python_dir.resolve().as_posix()}")
-        python: str = kwargs.get("python", sys.executable)
+        python: str = kwargs.get("python") or sys.executable
         python_path = Path(python)
         if not python_path.exists():
             raise FileNotFoundError(str(python))
@@ -128,6 +130,9 @@ class VenvDir(DirBase):
             upgrade_deps=False,
         )
         builder.create(venv_dir.resolve().as_posix())
+        pips = kwargs.get("pips") or []
+        venv_dir.joinpath("requirements.txt").write_text("\n".join(pips))
+        venv_dir.joinpath("workspaces").mkdir()
         cls.ensure_pip_install(venv_dir)
         assert cls.is_valid(venv_dir)
         return venv_dir.resolve()
@@ -162,13 +167,16 @@ class VenvDir(DirBase):
     @classmethod
     def ensure_pip_install(cls, path: Path):
         r = path / "requirements.txt"
-        r.touch()
         m = path / "requirements.md5"
         old_md5 = m.read_text(encoding="utf-8") if m.is_file() else ""
         current_md5 = md5(r.read_bytes()).hexdigest()
+        ok = False
         if old_md5 != current_md5:
             m.unlink(missing_ok=True)
-            requirements = r.read_text(encoding="utf-8")
+            if r.is_file():
+                requirements = r.read_text(encoding="utf-8")
+            else:
+                requirements = ""
             if requirements:
                 req_str = requirements.replace("\n", ", ")
                 logger.info(f"[Pip] Pip install: {r.resolve().as_posix()} {req_str}")
@@ -177,6 +185,7 @@ class VenvDir(DirBase):
                 ok = True
             if ok:
                 m.write_text(current_md5, encoding="utf-8")
+        return str(ok)
 
     @classmethod
     def is_valid(cls, path: Path):
@@ -187,7 +196,7 @@ class VenvDir(DirBase):
 class WorkspaceDir(DirBase):
     @classmethod
     def prepare_dir(cls, target_dir: Path, name: str = "", force=False, **kwargs):
-        workspace_dir = target_dir / "workspaces" / name
+        workspace_dir = target_dir / name
         if not force and cls.is_valid(workspace_dir):
             return workspace_dir.resolve()
         logger.info(
@@ -204,17 +213,32 @@ class WorkspaceDir(DirBase):
 
 
 class JobDir(DirBase):
+    default_meta_json = json.dumps(
+        {
+            "name": "job1",
+            "description": "",
+            "entrypoint": "",
+            "params": {},
+            "enable": 0,
+            "crontab": "* * * * *",
+            "timeout": 0,
+            "mem_limit": "",
+            "result_limit": "",
+            "stdout_limit": "",
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+
     @classmethod
     def prepare_dir(cls, target_dir: Path, name: str = "", force=False, **kwargs):
-        job_dir = target_dir / "jobs" / name
+        job_dir = target_dir / name
         if not force and cls.is_valid(job_dir):
             return job_dir.resolve()
         logger.info(f"[Init] Creating job_dir: {job_dir.resolve().as_posix()}")
-        job: Job = kwargs["job"]
         job_dir.mkdir(parents=True, exist_ok=True)
         job_dir.joinpath("meta.json").write_text(
-            json.dumps(job, indent=2, ensure_ascii=False),
-            encoding="utf-8",
+            cls.default_meta_json, encoding="utf-8"
         )
         assert cls.is_valid(job_dir)
         return job_dir.resolve()
@@ -305,12 +329,13 @@ class Taska:
             root_dir, "default", force=force, python=sys.executable
         )
         # 3. prepare venv dir
-        venv_dir = VenvDir.prepare_dir(python_dir, "venv1", force=force)
-        (venv_dir / "requirements.txt").write_text("morebuiltins")
+        venv_dir = VenvDir.prepare_dir(
+            python_dir, "venv1", force=force, pips=["morebuiltins"]
+        )
         VenvDir.ensure_pip_install(venv_dir)
         # 4. prepare workspace dir
         workspace_dir = WorkspaceDir.prepare_dir(
-            venv_dir, name="workspace1", force=force
+            venv_dir.joinpath("workspaces"), name="workspace1", force=force
         )
         # 4.1 add code
         workspace_dir.joinpath("mycode.py").write_text(
@@ -318,28 +343,22 @@ class Taska:
             encoding="utf-8",
         )
         # 5. prepare job dir
-        job: Job = default_dict(Job)
-        job["name"] = "test"
-        job["entrypoint"] = "mycode:main"
-        job["enable"] = 1
-        job["crontab"] = "* * * * *"
-        job["params"] = {"arg": "hello world"}
-        job_dir = JobDir.prepare_dir(workspace_dir, job["name"], force=force, job=job)
+        job_dir = JobDir.prepare_dir(workspace_dir / "jobs", "job1", force=force)
         return root_dir, python_dir, venv_dir, workspace_dir, job_dir
 
     @classmethod
     def launch_job(cls, job_path_or_dir: typing.Union[Path, str], timeout=0) -> Path:
         job_path = Path(job_path_or_dir).resolve()
-        if job_path.is_dir() and (job_path / "meta.json").is_file():
+        if job_path.is_dir() and job_path.joinpath("meta.json").is_file():
             job_dir = job_path
-            # job dir -> job meta file
-            job_path = job_dir / "meta.json"
-        elif job_path.is_file() and job_path.name == "meta.json":
+        elif job_path.is_file() and job_path.parent.joinpath("meta.json").is_file():
             job_dir = job_path.parent
         else:
             raise FileNotFoundError(job_path)
-        if not JobDir.is_valid(job_path.parent):
+        if not JobDir.is_valid(job_dir):
             raise FileNotFoundError
+        # job dir -> job meta file
+        job_path = job_dir / "meta.json"
         workspace_dir = job_dir.parent.parent
         venv_dir = workspace_dir.parent.parent
         runner_path = venv_dir.parent.parent / "runner.py"
