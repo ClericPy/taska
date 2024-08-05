@@ -334,14 +334,20 @@ def get_list_html(path: Path):
         html += f"<button onclick='delete_path(`{request.url}?action=delete`)'>Delete</button> | <a href='{request.url}?action=download'><button>Download</button></a> | <a href='{request.url}?action=view'><button>View</button></a> {stat} <br>"
         if path.stat().st_size < Config.max_file_size:
             text_arg = path.read_bytes().decode("utf-8", "replace")
+    max_text_tip = f"preview text-only file_size < {read_size(Config.max_file_size)}"
     html += """<hr><form action="/upload" method="post" enctype="multipart/form-data" id="upload_form">
 <input type="hidden" name="path" value="{path_arg}">
 File Name:
 <input type="text" name="file_name" value="{file_name_arg}"> or <input type="file" name="upload_file"><br>
-<textarea id="text" name="text" style='width:100%;height:50%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'>{text_arg}</textarea>
+<textarea placeholder="{max_text_tip}" title="{max_text_tip}" id="text" name="text" style='width:100%;height:50%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'>{text_arg}</textarea>
 <br>
 <input style="font-size: 1.5em;" type="submit" value="Upload <Ctrl+Enter>" /></form>
-""".format(path_arg=path_arg, file_name_arg=file_name_arg, text_arg=text_arg)
+""".format(
+        path_arg=path_arg,
+        file_name_arg=file_name_arg,
+        text_arg=text_arg,
+        max_text_tip=max_text_tip,
+    )
     html += r"""<script>
 document.addEventListener('DOMContentLoaded', function() {
     var upload_form = document.getElementById('upload_form');

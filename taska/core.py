@@ -133,6 +133,10 @@ class VenvDir(DirBase):
         builder.create(venv_dir.resolve().as_posix())
         pips = kwargs.get("pips") or []
         venv_dir.joinpath("requirements.txt").write_text("\n".join(pips))
+        # PIP_CONFIG_FILE
+        venv_dir.joinpath("pip.conf").write_text(
+            "[global]\ntimeout = 60", encoding="utf-8"
+        )
         venv_dir.joinpath("workspaces").mkdir()
         cls.ensure_pip_install(venv_dir)
         assert cls.is_valid(venv_dir)
@@ -153,12 +157,15 @@ class VenvDir(DirBase):
             "-r",
             req_file.resolve().as_posix(),
         ]
+        env = os.environ.copy()
+        env["PIP_CONFIG_FILE"] = venv_dir.joinpath("pip.conf").resolve().as_posix()
         proc = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             encoding="utf-8",
             errors="replace",
+            env=env,
         )
         if proc.returncode != 0:
             raise RuntimeError(f"pip install failed {proc.stderr}")
@@ -190,8 +197,10 @@ class VenvDir(DirBase):
 
     @classmethod
     def is_valid(cls, path: Path):
-        r = path / "requirements.txt"
-        return r.is_file()
+        return (
+            path.joinpath("requirements.txt").is_file()
+            and path.joinpath("pip.conf").is_file()
+        )
 
 
 class WorkspaceDir(DirBase):
