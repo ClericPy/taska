@@ -2,10 +2,13 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import time
 import traceback
+import typing
 from concurrent.futures import Future
+from functools import partial
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from threading import Thread, Timer
@@ -16,6 +19,25 @@ class LoggerStream:
         self.logger = logger
         self.linebuf = ""
         self.newline = True
+
+    @classmethod
+    def setup(cls, std_type: str, dir_path: Path, stdout_limit):
+        logger = logging.getLogger(f"{std_type}_log")
+        logger.setLevel(logging.DEBUG)
+        if not logger.hasHandlers():
+            handler = RotatingFileHandler(
+                dir_path.joinpath(f"{std_type}.log").resolve().as_posix(),
+                maxBytes=stdout_limit * 1.1,
+                backupCount=1,
+                encoding="utf-8",
+                errors="replace",
+            )
+            handler.terminator = ""
+            handler.setLevel(logging.DEBUG)
+            formatter = logging.Formatter("%(message)s")
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+        setattr(sys, std_type, LoggerStream(logger))
 
     def write(self, buf):
         if self.newline:
@@ -36,6 +58,16 @@ class SingletonError(RuntimeError):
 
 class MaxWorkersError(RuntimeError):
     pass
+
+
+class KillError(RuntimeError):
+    pass
+
+
+def handle_signal(sig, frame, future: typing.Optional[Future] = None):
+    print(f"[ERROR] Got sig: {sig}, pid: {os.getpid}", flush=True, file=sys.stderr)
+    if future:
+        future.set_exception(KillError("killed-%s" % sig))
 
 
 def read_size(text: str):
@@ -101,23 +133,8 @@ def log_result(result_limit, result_item: dict, start_ts):
 
 
 def setup_stdout_logger(cwd_path, stdout_limit):
-    stdout_logger = logging.getLogger("stdout_logger")
-    stdout_logger.setLevel(logging.DEBUG)
-    handler = RotatingFileHandler(
-        cwd_path.joinpath("stdout.log").resolve().as_posix(),
-        maxBytes=stdout_limit * 1.1,
-        backupCount=1,
-        encoding="utf-8",
-        errors="replace",
-    )
-    handler.terminator = ""
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter("%(message)s")
-    handler.setFormatter(formatter)
-    stdout_logger.addHandler(handler)
-    stream = LoggerStream(stdout_logger)
-    sys.stdout = sys.stderr = stream
-    return stdout_logger
+    LoggerStream.setup("stdout", cwd_path, stdout_limit)
+    LoggerStream.setup("stderr", cwd_path, stdout_limit)
 
 
 def setup_mem_limit(mem_limit: str):
@@ -206,14 +223,16 @@ def main():
     stdout_limit = read_size(meta["stdout_limit"] or default_log_size)
     start_at = time.strftime("%Y-%m-%d %H:%M:%S")
     start_ts = time.time()
+    pid = os.getpid()
     result_item = {
         "start_at": start_at,
         "end_at": None,
         "duration": None,
+        "pid": pid,
         "result": None,
         "error": None,
     }
-    pid_str = str(os.getpid())
+    pid_str = str(pid)
     pid_file = cwd_path / "pid.txt"
     global_pid_file = root_dir / "pids" / pid_str
     global_pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -226,9 +245,11 @@ def main():
         pid_file.write_text(pid_str)
         cwd_path.joinpath("result.jsonl").touch()
         setup_stdout_logger(cwd_path, stdout_limit)
-        print(f"[INFO] Job start. pid: {pid_str}", flush=True)
-        setup_mem_limit(meta["mem_limit"])
         EXEC_GLOBAL_FUTURE: Future = Future()
+        print(f"[INFO] Job start. pid: {pid_str}", flush=True, file=sys.stderr)
+        signal.signal(signal.SIGINT, partial(handle_signal, future=EXEC_GLOBAL_FUTURE))
+        signal.signal(signal.SIGTERM, partial(handle_signal, future=EXEC_GLOBAL_FUTURE))
+        setup_mem_limit(meta["mem_limit"])
         thread = Thread(
             target=start_job,
             args=(
@@ -255,11 +276,16 @@ def main():
         print(
             f"[ERROR] Job fail. pid: {pid_str}, start_at: {start_at}, error: {traceback.format_exc()}",
             flush=True,
+            file=sys.stderr,
         )
         result_item["error"] = repr(e)
     finally:
         log_result(result_limit, result_item, start_ts)
-        print(f"[INFO] Job end. pid: {pid_str}, start_at: {start_at}", flush=True)
+        print(
+            f"[INFO] Job end. pid: {pid_str}, start_at: {start_at}",
+            flush=True,
+            file=sys.stderr,
+        )
         if pid_file.is_file() and pid_file.read_text() == pid_str:
             pid_file.unlink(missing_ok=True)
         global_pid_file.unlink(missing_ok=True)
