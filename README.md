@@ -32,7 +32,7 @@ Code runner with typing-hint. Less is more, simple is the best.
               > result_limit="15m"\
               > stdout_limit="10m"\
               > timeout=60
-            - /job.pid(int)
+            - /pid.txt(int)
               > 29238
             - /stdout.log
             - /result.log
@@ -48,7 +48,7 @@ Code runner with typing-hint. Less is more, simple is the best.
               > result_limit="10m"\
               > stdout_limit="10m"\
               > timeout=10
-            - /job.pid(int)
+            - /pid.txt(int)
               > 32162
             - /stdout.log
             - /result.log

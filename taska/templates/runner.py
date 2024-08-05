@@ -214,7 +214,7 @@ def main():
         "error": None,
     }
     pid_str = str(os.getpid())
-    pid_file = cwd_path / "job.pid"
+    pid_file = cwd_path / "pid.txt"
     global_pid_file = root_dir / "pids" / pid_str
     global_pid_file.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -224,6 +224,7 @@ def main():
         global_pid_file.touch()
         # start job
         pid_file.write_text(pid_str)
+        cwd_path.joinpath("result.jsonl").touch()
         setup_stdout_logger(cwd_path, stdout_limit)
         print(f"[INFO] Job start. pid: {pid_str}", flush=True)
         setup_mem_limit(meta["mem_limit"])
