@@ -15,7 +15,8 @@ from hashlib import md5
 from pathlib import Path
 
 from morebuiltins.date import Crontab
-from morebuiltins.utils import is_running
+from morebuiltins.utils import is_running, read_size, ttime, read_time
+from psutil import Process
 
 logger = logging.getLogger("taska")
 
@@ -213,22 +214,18 @@ class WorkspaceDir(DirBase):
 
 
 class JobDir(DirBase):
-    default_meta_json = json.dumps(
-        {
-            "name": "job1",
-            "description": "",
-            "entrypoint": "",
-            "params": {},
-            "enable": 0,
-            "crontab": "* * * * *",
-            "timeout": 0,
-            "mem_limit": "",
-            "result_limit": "",
-            "stdout_limit": "",
-        },
-        indent=2,
-        ensure_ascii=False,
-    )
+    default_meta = {
+        "name": "job_name",
+        "description": "",
+        "entrypoint": "",
+        "params": {},
+        "enable": 0,
+        "crontab": "* * * * *",
+        "timeout": 0,
+        "mem_limit": "",
+        "result_limit": "",
+        "stdout_limit": "",
+    }
 
     @classmethod
     def prepare_dir(cls, target_dir: Path, name: str = "", force=False, **kwargs):
@@ -237,8 +234,10 @@ class JobDir(DirBase):
             return job_dir.resolve()
         logger.info(f"[Init] Creating job_dir: {job_dir.resolve().as_posix()}")
         job_dir.mkdir(parents=True, exist_ok=True)
+        meta = dict(cls.default_meta)
+        meta["name"] = name
         job_dir.joinpath("meta.json").write_text(
-            cls.default_meta_json, encoding="utf-8"
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
         )
         assert cls.is_valid(job_dir)
         return job_dir.resolve()
@@ -338,10 +337,13 @@ class Taska:
             venv_dir.joinpath("workspaces"), name="workspace1", force=force
         )
         # 4.1 add code
-        workspace_dir.joinpath("mycode.py").write_text(
-            """import time\n\ndef main(arg): return print(time.strftime('%Y-%m-%d %H:%M:%S'), arg) or 'result'""",
-            encoding="utf-8",
-        )
+        code_path = workspace_dir.joinpath("mycode.py")
+        if force or not code_path.is_file():
+            code_path.parent.mkdir(parents=True, exist_ok=True)
+            code_path.write_text(
+                """import time\n\ndef main(arg): return print(time.strftime('%Y-%m-%d %H:%M:%S'), arg) or 'result'""",
+                encoding="utf-8",
+            )
         # 5. prepare job dir
         job_dir = JobDir.prepare_dir(workspace_dir / "jobs", "job1", force=force)
         return root_dir, python_dir, venv_dir, workspace_dir, job_dir
@@ -385,6 +387,7 @@ class Taska:
                 proc.wait(timeout)
             except subprocess.TimeoutExpired:
                 pass
+        del proc
         return job_dir
 
     @classmethod
@@ -392,7 +395,7 @@ class Taska:
         path = Path(path)
         if not path.is_dir():
             return True
-        for pid_path in path.rglob("*.pid"):
+        for pid_path in path.rglob("pid.txt"):
             try:
                 pid = pid_path.read_bytes()
                 if is_running(pid):
@@ -401,6 +404,23 @@ class Taska:
                 continue
         shutil.rmtree(path.resolve().as_posix(), ignore_errors=True)
         return not path.is_dir()
+
+    @classmethod
+    def get_pids_info(cls, pids: typing.List[int], root_path: Path):
+        items = []
+        now = time.time()
+        for pid in pids:
+            proc = Process(pid)
+            item = {
+                "pid": pid,
+                "status": proc.status(),
+                "job_dir": Path(proc.cwd()).relative_to(root_path).as_posix(),
+                "start_at": ttime(proc.create_time()),
+                "elapsed": read_time(now - proc.create_time(), shorten=True),
+                "memory": read_size(proc.memory_info().rss, shorten=True),
+            }
+            items.append(item)
+        return items
 
 
 def test():

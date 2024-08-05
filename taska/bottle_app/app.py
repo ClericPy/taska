@@ -1,9 +1,9 @@
-import shutil
 import time
 import typing
 from collections import defaultdict
 from hashlib import md5
 from pathlib import Path
+from string import Template
 from urllib.parse import quote_plus
 
 from bottle import (
@@ -16,10 +16,11 @@ from bottle import (
     static_file,
 )
 from morebuiltins.functools import lru_cache_ttl
-from morebuiltins.utils import get_hash, read_size, read_time, ttime
+from morebuiltins.utils import get_hash, is_running, read_size, read_time, ttime
 
-from ..core import JobDir, PythonDir, Taska, VenvDir, WorkspaceDir
 from ..config import Config as MConfig
+from ..core import JobDir, PythonDir, Taska, VenvDir, WorkspaceDir
+from .console_template import console_template
 
 app = Bottle()
 keepalive_timeout = 60
@@ -37,6 +38,7 @@ class Config:
     root_path = Path.cwd()
     # file size limit
     max_file_size = 1024 * 16
+    console_template = Template(console_template)
 
 
 class AuthPlugin(object):
@@ -250,7 +252,14 @@ def get_list_html(path: Path):
     html = html.rstrip("/")
     path_arg = "/".join(parts[1:])
     if JobDir.is_valid(path) or JobDir.is_valid(path.parent):
-        html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=3'>Launch Job</a>"
+        running = "(not running)"
+        for pid_dir in [path.parent, path]:
+            try:
+                if is_running(int(pid_dir.joinpath("pid.txt").read_bytes())):
+                    running = "(running)"
+            except (FileNotFoundError, ValueError):
+                pass
+        html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=2'>Launch Job</a> | <a style='color:#009879' href='/console'>Console{running}</a>"
     elif path.is_dir():
         if path == Config.root_path:
             "create python dir"
@@ -267,6 +276,8 @@ def get_list_html(path: Path):
         elif WorkspaceDir.is_valid(path.parent) and path.name == "jobs":
             "create job dir"
             html += f" | <form style='color:red' method='get' action='/init/{JobDir.__name__}'><input placeholder='dir name' name='name'><input style='display:none' name='referer' value='{path_arg}'><input type='submit' value='Create JobDir'></form>"
+    elif path.is_file() and path.suffix == ".py" and WorkspaceDir.is_valid(path.parent):
+        html += f" | <form style='color:red' method='get' action='/init/{JobDir.__name__}'><input placeholder='dir name' name='name'><input style='display:none' name='referer' value='{path_arg}'><input type='submit' value='Create Job'></form>"
     html += "<hr>"
     text_arg = ""
     file_name_arg = ""
@@ -356,7 +367,7 @@ def list_dir(path):
         if not real_path.parent.is_relative_to(root):
             return "path not found"
         if real_path.is_dir():
-            shutil.rmtree(real_path)
+            Taska.safe_rm_dir(real_path)
         else:
             real_path.unlink()
         back = "/".join(request.path.split("/")[:-1])
@@ -478,14 +489,53 @@ def upload():
 
 @app.get("/console")
 def console():
-    root = Config.root_path
-    return ""
-
-
-@app.get("/create_default_dir")
-def create_default_dir():
-    root = Config.root_path
-    return ""
+    pids_dir = Config.root_path.joinpath("pids")
+    pids = []
+    for pid_path in Config.root_path.rglob("pid.txt"):
+        pid = None
+        try:
+            pid = int(pid_path.read_bytes())
+        except FileNotFoundError:
+            pass
+        finally:
+            if pid:
+                if is_running(pid):
+                    pids.append(pid)
+                else:
+                    pids_dir.joinpath(str(pid)).unlink(missing_ok=True)
+                    pid_path.unlink(missing_ok=True)
+    if pids:
+        m_file = Config.root_path.joinpath("max_workers")
+        if m_file.is_file():
+            max_workers = m_file.read_text().strip() or "-"
+        else:
+            max_workers = "-"
+        items = Taska.get_pids_info(pids, root_path=Config.root_path)
+        # [{'pid': 10916, 'status': 'running', 'job_dir': 'default/venv1/workspaces/workspace1/jobs/job1', 'start_at': '2024-08-05 21:36:35', 'elapsed': '19 secs', 'memory': '17 MB'}]
+        th_list = [
+            f"<th>{k}</th>"
+            for k in [
+                f"*/{max_workers}",
+                "pid",
+                "status",
+                "start_at",
+                "elapsed",
+                "memory",
+                "job_dir",
+            ]
+        ]
+        tr_list = []
+        for row_id, item in enumerate(items, 1):
+            href = f'<a target="_blank" href="/view/{item["job_dir"]}">{item["job_dir"]}</a>'
+            tr_list.append(
+                f"<tr><td>{row_id}</td><td>{item['pid']}</td><td>{item['status']}</td><td>{item['start_at']}</td><td>{item['elapsed']}</td><td>{item['memory']}</td><td>{href}</td></tr>"
+            )
+        html = Config.console_template.substitute(
+            th_list="\n".join(th_list), tr_list="\n".join(tr_list)
+        )
+        return html
+    else:
+        return "no running pids"
 
 
 def main(root_path, host="127.0.0.1", port=8021, debug=False):
