@@ -258,6 +258,7 @@ def get_list_html(path: Path):
     html = html.rstrip("/")
     path_arg = "/".join(parts[1:])
     if JobDir.is_valid(path) or JobDir.is_valid(path.parent):
+        html += "<hr>"
         kill_html = ""
         for pid_dir in [path.parent, path]:
             try:
@@ -266,7 +267,7 @@ def get_list_html(path: Path):
                     kill_html = f" | <a style='color:red' href='/console?kill={pid}&signal=15'>Kill - {pid}</a>"
             except (FileNotFoundError, ValueError):
                 pass
-        html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=2'>Launch Job</a> | <a style='color:#009879' href='/console'>Console</a>{kill_html}"
+        html += f"<a style='color:red' href='/launch/{path_arg}?timeout=2'>Launch Job</a> | <a style='color:#009879' href='/console'>Console</a>{kill_html}"
     elif path.is_dir():
         if path == Config.root_path:
             "create python dir"
@@ -315,7 +316,10 @@ def get_list_html(path: Path):
             stat = f"<span style='color:{stat_color};width:260px;display: inline-block;font-size: 0.8em'> | {time_stat} | {size}</span>"
             file_url = f"{request.url.rstrip('/')}/{quote_plus(_path.name)}"
             dir_disabled = " disabled" if _path.is_dir() else ""
-            html += f"<button onclick='delete_path(`{file_url}?action=delete`)'>Delete</button> | <a href='{file_url}?action=download'><button{dir_disabled}>Download</button></a> | <a href='{file_url}?action=view'><button{dir_disabled}>View</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a><br>"
+            rename_html = f"<form action='/rename' method='get' style='display: inline;'><input style='display:none' name='old_path' value='{path_arg}/{_path.name}'><input type='text' name='name' value='{_path.name}'><input type='submit' value='Rename'></form> | "
+            html += f"{rename_html}<button onclick='delete_path(`{file_url}?action=delete`)'>Delete</button> | <a href='{file_url}?action=download'><button{dir_disabled}>Download</button></a> | <a href='{file_url}?action=view'><button{dir_disabled}>View</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a>"
+            # add rename form
+            html += "<br>"
     else:
         file_name_arg = path.name
         p = path.relative_to(Config.root_path).as_posix()
@@ -340,8 +344,8 @@ File Name:
 """.format(path_arg=path_arg, file_name_arg=file_name_arg, text_arg=text_arg)
     html += r"""<script>
 document.addEventListener('DOMContentLoaded', function() {
-    var textarea = document.getElementById('text');
-    textarea.addEventListener('keydown', function(event) {
+    var upload_form = document.getElementById('upload_form');
+    upload_form.addEventListener('keydown', function(event) {
         if (event.ctrlKey && event.key === 'Enter') {
             event.preventDefault();
             document.getElementById('upload_form').submit();
@@ -358,6 +362,15 @@ document.addEventListener('DOMContentLoaded', function() {
     return f"<body style='width:80%;margin: 0 auto;'>{html}{delete_code}</body>"
 
 
+@app.get("/rename")
+def rename():
+    old_path = request.query["old_path"].lstrip("/")
+    path = Config.root_path.joinpath(old_path).resolve()
+    if path.exists() and path.is_relative_to(Config.root_path):
+        path.rename(path.with_name(request.query["name"]))
+    redirect(f"/view/{'/'.join(old_path.split('/')[:-1]) or '/'}")
+
+
 @app.route("/launch/<path:path>")
 def launch(path):
     root = Config.root_path
@@ -369,6 +382,12 @@ def launch(path):
     parts = job_dir.relative_to(Config.root_path.parent).parts
     path_arg = "/".join(parts[1:])
     return redirect(f"/view/{path_arg}")
+
+
+@app.get("/view")
+@app.get("/view/")
+def redirect_view_root():
+    redirect("/view//")
 
 
 @app.get("/view/<path:path>")
@@ -618,7 +637,7 @@ def proc_info_to_tr(item, row_id, pid):
 
 
 def main(root_path, host="127.0.0.1", port=8021, debug=False):
-    # app.install(AuthPlugin())
+    app.install(AuthPlugin())
     Config.root_path = Path(root_path).resolve()
     logger.warning(f"root_path: {Config.root_path}")
     Taska.prepare_default_env(Config.root_path, force=False)
