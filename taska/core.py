@@ -407,7 +407,7 @@ class Taska:
 
     @classmethod
     def get_pids_info(cls, pids: typing.List[int], root_path: Path):
-        items = []
+        items: dict = {}
         now = time.time()
         for pid in pids:
             proc = Process(pid)
@@ -419,7 +419,7 @@ class Taska:
                 "elapsed": read_time(now - proc.create_time(), shorten=True),
                 "memory": read_size(proc.memory_info().rss, shorten=True),
             }
-            items.append(item)
+            items[pid] = item
         return items
 
 

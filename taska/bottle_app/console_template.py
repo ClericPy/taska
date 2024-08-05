@@ -41,7 +41,15 @@ console_template = r"""<!DOCTYPE html>
         .styled-table tbody tr:last-of-type {
             border-bottom: 2px solid #009879;
         }
+        .dead{
+            color: gray;
+        }
     </style>
+    <script>
+        function redirect(url) {
+            window.location.href = url;
+        }
+    </script>
 </head>
 
 <body>

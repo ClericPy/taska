@@ -1,3 +1,6 @@
+import json
+import re
+import sys
 import time
 import typing
 from collections import defaultdict
@@ -16,7 +19,8 @@ from bottle import (
     static_file,
 )
 from morebuiltins.functools import lru_cache_ttl
-from morebuiltins.utils import get_hash, is_running, read_size, read_time, ttime
+from morebuiltins.utils import get_hash, is_running, ptime, read_size, read_time, ttime
+from psutil import Process
 
 from ..config import Config as MConfig
 from ..core import JobDir, PythonDir, Taska, VenvDir, WorkspaceDir
@@ -39,6 +43,8 @@ class Config:
     # file size limit
     max_file_size = 1024 * 16
     console_template = Template(console_template)
+    latest_proc_cache: dict = {}
+    latest_proc_cache_size = 30
 
 
 class AuthPlugin(object):
@@ -252,14 +258,15 @@ def get_list_html(path: Path):
     html = html.rstrip("/")
     path_arg = "/".join(parts[1:])
     if JobDir.is_valid(path) or JobDir.is_valid(path.parent):
-        running = "(not running)"
+        kill_html = ""
         for pid_dir in [path.parent, path]:
             try:
-                if is_running(int(pid_dir.joinpath("pid.txt").read_bytes())):
-                    running = "(running)"
+                pid = int(pid_dir.joinpath("pid.txt").read_bytes())
+                if is_running(pid):
+                    kill_html = f" | <a style='color:red' href='/console?kill={pid}&signal=15'>Kill - {pid}</a>"
             except (FileNotFoundError, ValueError):
                 pass
-        html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=2'>Launch Job</a> | <a style='color:#009879' href='/console'>Console{running}</a>"
+        html += f" | <a style='color:red' href='/launch/{path_arg}?timeout=2'>Launch Job</a> | <a style='color:#009879' href='/console'>Console</a>{kill_html}"
     elif path.is_dir():
         if path == Config.root_path:
             "create python dir"
@@ -323,15 +330,25 @@ def get_list_html(path: Path):
         html += f"<button onclick='delete_path(`{request.url}?action=delete`)'>Delete</button> | <a href='{request.url}?action=download'><button>Download</button></a> | <a href='{request.url}?action=view'><button>View</button></a> {stat} <br>"
         if path.stat().st_size < Config.max_file_size:
             text_arg = path.read_bytes().decode("utf-8", "replace")
-    html += """<hr><form action="/upload" method="post" enctype="multipart/form-data">
+    html += """<hr><form action="/upload" method="post" enctype="multipart/form-data" id="upload_form">
 <input type="hidden" name="path" value="{path_arg}">
 File Name:
 <input type="text" name="file_name" value="{file_name_arg}"> or <input type="file" name="upload_file"><br>
 <textarea id="text" name="text" style='width:100%;height:50%;border: groove;padding: 2em;font-size: 1.5em;text-wrap: pretty;'>{text_arg}</textarea>
 <br>
-<input style="font-size: 1.5em;" type="submit" value="Upload" /></form>""".format(
-        path_arg=path_arg, file_name_arg=file_name_arg, text_arg=text_arg
-    )
+<input style="font-size: 1.5em;" type="submit" value="Upload <Ctrl+Enter>" /></form>
+""".format(path_arg=path_arg, file_name_arg=file_name_arg, text_arg=text_arg)
+    html += r"""<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var textarea = document.getElementById('text');
+    textarea.addEventListener('keydown', function(event) {
+        if (event.ctrlKey && event.key === 'Enter') {
+            event.preventDefault();
+            document.getElementById('upload_form').submit();
+        }
+    });
+});
+</script>"""
     delete_code = r"""<script>function delete_path(url){
     var isConfirmed = confirm('Are you sure you want to delete this item?');
     if (isConfirmed) {
@@ -489,9 +506,30 @@ def upload():
 
 @app.get("/console")
 def console():
-    pids_dir = Config.root_path.joinpath("pids")
+    root = Config.root_path
+    kill = request.query.get("kill")
+    if kill:
+        pid = int(kill)
+        if root.joinpath(f"pids/{pid}").is_file():
+            signal = int(request.query.get("signal") or 2)
+            proc = Process(pid)
+            if proc.is_running():
+                if signal == 9:
+                    proc.kill()
+                elif signal == 15:
+                    proc.terminate()
+                elif signal == 2:
+                    if sys.platform == "win32":
+                        proc.kill()
+                    else:
+                        proc.send_signal(2)
+                else:
+                    raise ValueError("bad signal")
+                proc.wait(5)
+        redirect("/console")
+    pids_dir = root.joinpath("pids")
     pids = []
-    for pid_path in Config.root_path.rglob("pid.txt"):
+    for pid_path in root.rglob("pid.txt"):
         pid = None
         try:
             pid = int(pid_path.read_bytes())
@@ -504,38 +542,79 @@ def console():
                 else:
                     pids_dir.joinpath(str(pid)).unlink(missing_ok=True)
                     pid_path.unlink(missing_ok=True)
-    if pids:
-        m_file = Config.root_path.joinpath("max_workers")
-        if m_file.is_file():
-            max_workers = m_file.read_text().strip() or "-"
-        else:
-            max_workers = "-"
-        items = Taska.get_pids_info(pids, root_path=Config.root_path)
-        # [{'pid': 10916, 'status': 'running', 'job_dir': 'default/venv1/workspaces/workspace1/jobs/job1', 'start_at': '2024-08-05 21:36:35', 'elapsed': '19 secs', 'memory': '17 MB'}]
-        th_list = [
-            f"<th>{k}</th>"
-            for k in [
-                f"*/{max_workers}",
-                "pid",
-                "status",
-                "start_at",
-                "elapsed",
-                "memory",
-                "job_dir",
-            ]
-        ]
-        tr_list = []
-        for row_id, item in enumerate(items, 1):
-            href = f'<a target="_blank" href="/view/{item["job_dir"]}">{item["job_dir"]}</a>'
-            tr_list.append(
-                f"<tr><td>{row_id}</td><td>{item['pid']}</td><td>{item['status']}</td><td>{item['start_at']}</td><td>{item['elapsed']}</td><td>{item['memory']}</td><td>{href}</td></tr>"
-            )
-        html = Config.console_template.substitute(
-            th_list="\n".join(th_list), tr_list="\n".join(tr_list)
-        )
-        return html
+    m_file = root.joinpath("max_workers")
+    if m_file.is_file():
+        max_workers = m_file.read_text().strip() or "-"
     else:
-        return "no running pids"
+        max_workers = "-"
+    items: dict = Taska.get_pids_info(pids, root_path=root)
+    Config.latest_proc_cache.update(items)
+    # [{'pid': 10916, 'status': 'running', 'job_dir': 'default/venv1/workspaces/workspace1/jobs/job1', 'start_at': '2024-08-05 21:36:35', 'elapsed': '19 secs', 'memory': '17 MB'}]
+    th_list = [
+        f"<th>{k}</th>"
+        for k in [
+            f"*/{max_workers}",
+            "pid",
+            "status",
+            "start_at",
+            "end_at",
+            "elapsed",
+            "memory",
+            "job_dir",
+            "kill-2",
+            "kill-15",
+            "kill-9",
+        ]
+    ]
+    tr_list = []
+    rows = sorted(
+        Config.latest_proc_cache.items(),
+        key=lambda x: x[1]["start_at"],
+        reverse=True,
+    )
+    latest_proc_cache_size = Config.latest_proc_cache_size
+    for row_id, (pid, item) in enumerate(rows, 1):
+        if pid in items:
+            tr_list.append(proc_info_to_tr(item, row_id, pid))
+        elif row_id < latest_proc_cache_size:
+            if item["status"] != "dead":
+                cache_item = Config.latest_proc_cache[pid]
+                cache_item["status"] = "dead"
+                cache_item["end_at"], cache_item["elapsed"] = get_end_at(item, root)
+                item = cache_item
+            tr_list.append(proc_info_to_tr(item, row_id, pid))
+        else:
+            Config.latest_proc_cache.pop(pid, None)
+    html = Config.console_template.substitute(
+        th_list="\n".join(th_list), tr_list="\n".join(tr_list)
+    )
+    return html
+
+
+def get_end_at(item, root: Path):
+    result_path = root.joinpath(item["job_dir"]).joinpath("result.jsonl")
+    if result_path.is_file():
+        with open(result_path, "r", encoding="utf-8") as f:
+            pid = item["pid"]
+            regex = re.compile(f'"pid": ?{pid},')
+            for line in f:
+                if regex.search(line):
+                    data = json.loads(line)
+                    if data.get("pid") == pid:
+                        return data["end_at"], read_time(
+                            ptime(data["end_at"]) - ptime(data["start_at"]),
+                            shorten=True,
+                        )
+    return "-", "-"
+
+
+def proc_info_to_tr(item, row_id, pid):
+    href = f'<a target="_blank" href="/view/{item["job_dir"]}">{item["job_dir"]}</a>'
+    if item["status"] == "running":
+        buttons = f"""<td><button onclick='redirect("?kill={pid}&signal=2")'>kill</button></td><td><button onclick='redirect("?kill={pid}&signal=15")'>kill</button></td><td><button onclick='redirect("?kill={pid}&signal=9")' style='color:red'>kill</button></td>"""
+    else:
+        buttons = """<td>-</td><td>-</td><td>-</td>"""
+    return f"""<tr class="{item['status']}"><td>{row_id}</td><td>{item['pid']}</td><td>{item['status']}</td><td>{item['start_at']}</td><td>{item.get('end_at', '-')}</td><td>{item['elapsed']}</td><td>{item['memory']}</td><td>{href}</td>{buttons}</tr>"""
 
 
 def main(root_path, host="127.0.0.1", port=8021, debug=False):
