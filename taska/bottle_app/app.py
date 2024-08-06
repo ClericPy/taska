@@ -295,29 +295,32 @@ def get_list_html(path: Path):
             path.iterdir(), key=lambda i: f"-{i.name}" if i.is_dir() else i.name
         )
         for _path in path_list:
-            p = _path.relative_to(Config.root_path).as_posix()
-            mtime = _path.stat().st_mtime
-            if _path.is_dir():
-                color = "darkorange"
-                icon = "&#128194;"
-                size = " - "
-                stat_color = old_color
-            else:
-                color = "black"
-                icon = "&#128196;"
-                size = read_size(_path.stat().st_size, 1, shorten=True)
-                if now - mtime < 5 * 60:
-                    stat_color = new_color
-                else:
+            try:
+                p = _path.relative_to(Config.root_path).as_posix()
+                mtime = _path.stat().st_mtime
+                if _path.is_dir():
+                    color = "darkorange"
+                    icon = "&#128194;"
+                    size = " - "
                     stat_color = old_color
-            time_stat = f"{ttime(mtime)}({read_time(now-mtime, shorten=True):->8})"
-            stat = f"<span style='color:{stat_color};width:260px;display: inline-block;font-size: 0.8em'> | {time_stat} | {size}</span>"
-            file_url = f"{request.url.rstrip('/')}/{quote_plus(_path.name)}"
-            dir_disabled = " disabled" if _path.is_dir() else ""
-            rename_html = f"<form action='/rename' method='get' style='display: inline;'><input style='display:none' name='old_path' value='{path_arg}/{_path.name}'><input type='text' name='name' value='{_path.name}'><input type='submit' value='Rename'></form> | "
-            html += f"{rename_html}<button onclick='delete_path(`{file_url}?action=delete`)'>Delete</button> | <a href='{file_url}?action=download'><button{dir_disabled}>Download</button></a> | <a href='{file_url}?action=view'><button{dir_disabled}>View</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a>"
-            # add rename form
-            html += "<br>"
+                else:
+                    color = "black"
+                    icon = "&#128196;"
+                    size = read_size(_path.stat().st_size, 1, shorten=True)
+                    if now - mtime < 5 * 60:
+                        stat_color = new_color
+                    else:
+                        stat_color = old_color
+                time_stat = f"{ttime(mtime)}({read_time(now-mtime, shorten=True):->8})"
+                stat = f"<span style='color:{stat_color};width:260px;display: inline-block;font-size: 0.8em'> | {time_stat} | {size}</span>"
+                file_url = f"{request.url.rstrip('/')}/{quote_plus(_path.name)}"
+                dir_disabled = " disabled" if _path.is_dir() else ""
+                rename_html = f"<form action='/rename' method='get' style='display: inline;'><input style='display:none' name='old_path' value='{path_arg}/{_path.name}'><input type='text' name='name' value='{_path.name}'><input type='submit' value='Rename'></form> | "
+                html += f"{rename_html}<button onclick='delete_path(`{file_url}?action=delete`)'>Delete</button> | <a href='{file_url}?action=download'><button{dir_disabled}>Download</button></a> | <a href='{file_url}?action=view'><button{dir_disabled}>View</button></a> {stat} <a style='color:{color}' href='/view/{p}'>{icon} {_path.name}</a>"
+                # add rename form
+                html += "<br>"
+            except FileNotFoundError:
+                continue
     else:
         file_name_arg = path.name
         p = path.relative_to(Config.root_path).as_posix()
