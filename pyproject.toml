@@ -11,7 +11,7 @@ classifiers = ["License :: OSI Approved :: MIT License"]
 dynamic = ["version", "description"]
 requires-python = ">=3.7"
 dependencies = [
-    "morebuiltins >=1.0.8",
+    "morebuiltins >=1.0.9",
     "bottle",
     "waitress",
     "psutil",
