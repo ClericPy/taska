@@ -630,7 +630,7 @@ def console():
 
 def proc_info_to_tr(item, row_id, pid):
     grep = "%s%s" % (quote_plus('"pid": '), item["pid"])
-    href = f'<a target="_blank" href="/view/{item["job_dir"]}/result.jsonl?action=view&grep={grep}">{item["job_dir"]}</a>'
+    href = f'<a target="_blank" href="/view/{item["job_dir"]}">{item["job_dir"]}</a>; <a target="_blank" href="/view/{item["job_dir"]}/result.jsonl?action=view&grep={grep}">result</a>'
     if item["status"] == "running":
         buttons = f"""<td><button onclick='redirect("?kill={pid}&signal=2")'>kill</button></td><td><button onclick='redirect("?kill={pid}&signal=15")'>kill</button></td><td><button onclick='redirect("?kill={pid}&signal=9")' style='color:red'>kill</button></td>"""
     else:
