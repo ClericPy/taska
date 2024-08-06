@@ -1,3 +1,4 @@
+import mimetypes
 import signal
 import sys
 import time
@@ -447,6 +448,9 @@ def list_dir(path):
                     result = "".join(lines)
                     return f"<pre>{result}</pre>"
             else:
+                ct = mimetypes.guess_type(real_path.as_posix())
+                if ct[0]:
+                    response.content_type = ct[0]
                 return real_path.read_bytes()
         else:
             return "not a file"
