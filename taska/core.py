@@ -289,7 +289,8 @@ class Taska:
                 )
             timeleft = next_min.timestamp() - time.time()
             interval = min((1, timeleft))
-            time.sleep(interval)
+            if interval > 0:
+                time.sleep(interval)
         logger.warning("[End] Program shutdown")
 
     def run_once(self):
