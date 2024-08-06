@@ -5,8 +5,6 @@ from morebuiltins.functools import SizedTimedRotatingFileHandler
 
 
 class Config:
-    SHUTDOWN = False
-
     LOG_STREAM = True
     LOG_DIR = None
     LOG_LEVEL = logging.DEBUG
@@ -30,7 +28,7 @@ class Config:
                     when="midnight",
                     interval=1,
                     backupCount=7,
-                    maxBytes=100 * 1024 * 1024,
+                    maxBytes=50 * 1024 * 1024,
                 )
                 file_handler.setLevel(cls.LOG_LEVEL)
                 file_handler.setFormatter(fmt)

@@ -5,7 +5,11 @@ Code runner with typing-hint. Less is more, simple is the best.
 
 `WORK_DIR > Python > Venv > Workspace > Job`
 
-### Demo:
+## Usage:
+
+> python -m taska ./demo --host=127.0.0.1 --port=8021
+
+### Demo files:
 
 - /root_dir
   > root_dir=`$WORK_DIR/$CWD`

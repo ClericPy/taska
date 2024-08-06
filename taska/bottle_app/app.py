@@ -1,5 +1,4 @@
-import json
-import re
+import signal
 import sys
 import time
 import typing
@@ -19,7 +18,7 @@ from bottle import (
     static_file,
 )
 from morebuiltins.functools import lru_cache_ttl
-from morebuiltins.utils import get_hash, is_running, ptime, read_size, read_time, ttime
+from morebuiltins.utils import get_hash, is_running, read_size, read_time, ttime
 from psutil import Process
 
 from ..config import Config as MConfig
@@ -41,10 +40,8 @@ class Config:
     salt = md5(Path(__file__).read_bytes()).hexdigest()
     root_path = Path.cwd()
     # file size limit
-    max_file_size = 1024 * 16
+    max_file_size = 1024 * 100
     console_template = Template(console_template)
-    latest_proc_cache: dict = {}
-    latest_proc_cache_size = 30
 
 
 class AuthPlugin(object):
@@ -247,7 +244,7 @@ def init(dir_type):
 
 
 def get_list_html(path: Path):
-    html = ""
+    html = "<a style='color: black' href='/'>Home</a> - "
     parts = path.relative_to(Config.root_path.parent).parts
     for index, part in enumerate(parts):
         if index == 0:
@@ -434,9 +431,21 @@ def list_dir(path):
             response.body = file_content
             return response
     elif action == "view":
+        grep = request.query.get("grep")
         if real_path.is_file():
-            return real_path.read_bytes()
-        return "not a file"
+            if grep:
+                encoding = request.query.get("encoding") or "utf-8"
+                with open(real_path, "r", encoding=encoding) as f:
+                    lines = []
+                    for line in f:
+                        if grep in line:
+                            lines.append(line)
+                    result = "".join(lines)
+                    return f"<pre>{result}</pre>"
+            else:
+                return real_path.read_bytes()
+        else:
+            return "not a file"
     elif "tail" in request.query:
         return handle_tail(real_path, get_hash((time.time(), real_path.as_posix())))
 
@@ -551,7 +560,7 @@ def console():
                 else:
                     raise ValueError("bad signal")
                 proc.wait(5)
-        redirect("/console")
+        redirect(request.headers.get("Referer") or "/console")
     pids_dir = root.joinpath("pids")
     pids = []
     for pid_path in root.rglob("pid.txt"):
@@ -572,13 +581,13 @@ def console():
         max_workers = m_file.read_text().strip() or "-"
     else:
         max_workers = "-"
-    items: dict = Taska.get_pids_info(pids, root_path=root)
-    Config.latest_proc_cache.update(items)
+    items: dict = Taska.get_pids_info(pids)
+    Taska.LATEST_PROC_CACHE.update(items)
     # [{'pid': 10916, 'status': 'running', 'job_dir': 'default/venv1/workspaces/workspace1/jobs/job1', 'start_at': '2024-08-05 21:36:35', 'elapsed': '19 secs', 'memory': '17 MB'}]
     th_list = [
         f"<th>{k}</th>"
         for k in [
-            f"*/{max_workers}",
+            f"*/{max_workers} - <a style='color: #ffffff' href='/'>Home</a>",
             "pid",
             "status",
             "start_at",
@@ -593,48 +602,34 @@ def console():
     ]
     tr_list = []
     rows = sorted(
-        Config.latest_proc_cache.items(),
+        Taska.LATEST_PROC_CACHE.items(),
         key=lambda x: x[1]["start_at"],
         reverse=True,
     )
-    latest_proc_cache_size = Config.latest_proc_cache_size
+    cache_length = Taska.CACHE_LENGTH
     for row_id, (pid, item) in enumerate(rows, 1):
         if pid in items:
             tr_list.append(proc_info_to_tr(item, row_id, pid))
-        elif row_id < latest_proc_cache_size:
+        elif row_id < cache_length:
             if item["status"] != "dead":
-                cache_item = Config.latest_proc_cache[pid]
+                cache_item = Taska.LATEST_PROC_CACHE[pid]
                 cache_item["status"] = "dead"
-                cache_item["end_at"], cache_item["elapsed"] = get_end_at(item, root)
+                cache_item["start_at"], cache_item["end_at"], cache_item["elapsed"] = (
+                    Taska.get_end_at(item)
+                )
                 item = cache_item
             tr_list.append(proc_info_to_tr(item, row_id, pid))
         else:
-            Config.latest_proc_cache.pop(pid, None)
+            Taska.LATEST_PROC_CACHE.pop(pid, None)
     html = Config.console_template.substitute(
         th_list="\n".join(th_list), tr_list="\n".join(tr_list)
     )
     return html
 
 
-def get_end_at(item, root: Path):
-    result_path = root.joinpath(item["job_dir"]).joinpath("result.jsonl")
-    if result_path.is_file():
-        with open(result_path, "r", encoding="utf-8") as f:
-            pid = item["pid"]
-            regex = re.compile(f'"pid": ?{pid},')
-            for line in f:
-                if regex.search(line):
-                    data = json.loads(line)
-                    if data.get("pid") == pid:
-                        return data["end_at"], read_time(
-                            ptime(data["end_at"]) - ptime(data["start_at"]),
-                            shorten=True,
-                        )
-    return "-", "-"
-
-
 def proc_info_to_tr(item, row_id, pid):
-    href = f'<a target="_blank" href="/view/{item["job_dir"]}">{item["job_dir"]}</a>'
+    grep = "%s%s" % (quote_plus('"pid": '), item["pid"])
+    href = f'<a target="_blank" href="/view/{item["job_dir"]}/result.jsonl?action=view&grep={grep}">{item["job_dir"]}</a>'
     if item["status"] == "running":
         buttons = f"""<td><button onclick='redirect("?kill={pid}&signal=2")'>kill</button></td><td><button onclick='redirect("?kill={pid}&signal=15")'>kill</button></td><td><button onclick='redirect("?kill={pid}&signal=9")' style='color:red'>kill</button></td>"""
     else:
@@ -642,10 +637,17 @@ def proc_info_to_tr(item, row_id, pid):
     return f"""<tr class="{item['status']}"><td>{row_id}</td><td>{item['pid']}</td><td>{item['status']}</td><td>{item['start_at']}</td><td>{item.get('end_at', '-')}</td><td>{item['elapsed']}</td><td>{item['memory']}</td><td>{href}</td>{buttons}</tr>"""
 
 
+def handle_signal(sig, b):
+    logger.warn(f"signal received {sig}, close app")
+    sys.exit()
+
+
 def main(root_path, host="127.0.0.1", port=8021, debug=False):
-    app.install(AuthPlugin())
     Config.root_path = Path(root_path).resolve()
-    logger.warning(f"root_path: {Config.root_path}")
-    Taska.prepare_default_env(Config.root_path, force=False)
-    logger.warning(f"start server at {host}:{port}, debug={debug}")
+    app.install(AuthPlugin())
+    logger.warning(
+        f"start server: root_path: {Config.root_path}, debug={debug}, http://{host}:{port}"
+    )
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
     app.run(server="waitress", host=host, port=port, debug=debug)
