@@ -106,9 +106,7 @@ def ensure_singleton(current_pid, pid_file: Path):
     if not old_pid:
         return
     if is_running(int(old_pid)):
-        raise SingletonError(
-            f"Job already running. pid: {current_pid}, running_pid: {old_pid}"
-        )
+        raise SingletonError(f"Job already running, running_pid: {old_pid}")
 
 
 def log_result(result_limit, result_item: dict, start_ts):

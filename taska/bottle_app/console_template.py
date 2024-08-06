@@ -4,7 +4,7 @@ console_template = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Running Processes</title>
+    <title>Console</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -53,7 +53,6 @@ console_template = r"""<!DOCTYPE html>
 </head>
 
 <body>
-
     <table class="styled-table">
         <thead>
             <tr>

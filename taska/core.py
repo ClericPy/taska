@@ -15,8 +15,8 @@ from hashlib import md5
 from pathlib import Path
 
 from morebuiltins.date import Crontab
-from morebuiltins.utils import is_running, read_size, ttime, read_time
-from psutil import Process
+from morebuiltins.utils import is_running, ptime, read_size, read_time, ttime
+from psutil import NoSuchProcess, Process
 
 logger = logging.getLogger("taska")
 
@@ -258,10 +258,15 @@ class JobDir(DirBase):
 
 class Taska:
     SHUTDOWN = False
+    ROOT_PATH: typing.Optional[Path] = None
     TREE_LEVELS = [RootDir, PythonDir, VenvDir, WorkspaceDir, JobDir]
+    LATEST_PROC_CACHE: dict = {}
+    CACHE_LENGTH = 100
 
-    def __init__(self, root_dir: typing.Union[Path, str]):
-        self.root_dir = Path(root_dir).resolve()
+    def __init__(self):
+        if self.ROOT_PATH is None:
+            raise ValueError("Taska.ROOT_PATH is not set")
+        self.root_dir = self.ROOT_PATH
         self.tree = self.init_dir_tree()
         signal.signal(signalnum=signal.SIGINT, handler=self.handle_shutdown)
         signal.signal(signalnum=signal.SIGTERM, handler=self.handle_shutdown)
@@ -391,11 +396,40 @@ class Taska:
         else:
             proc = subprocess.Popen(cmd, start_new_session=True, cwd=job_dir.as_posix())
         setattr(proc, "_child_created", False)
-        if timeout:
+        pid_path = job_dir / "pid.txt"
+        pid = None
+        for _ in range((timeout or 1) * 10):
             try:
-                proc.wait(timeout)
+                try:
+                    if not pid:
+                        pid = int(pid_path.read_bytes() or 0)
+                        items: dict = cls.get_pids_info([pid])
+                        cls.LATEST_PROC_CACHE.update(items)
+                        jobs = sorted(
+                            cls.LATEST_PROC_CACHE.items(),
+                            key=lambda x: x[1]["start_at"],
+                        )
+                        for k, v in jobs:
+                            if v["status"] == "running":
+                                try:
+                                    v["status"] = Process(k).status()
+                                except NoSuchProcess:
+                                    v["status"] = "dead"
+                            elif len(cls.LATEST_PROC_CACHE) > cls.CACHE_LENGTH:
+                                cls.LATEST_PROC_CACHE.pop(k, None)
+                except FileNotFoundError:
+                    pass
+                if proc.wait(0.1):
+                    if pid:
+                        item = Taska.LATEST_PROC_CACHE[pid]
+                        item["status"] = "dead"
+                        item["start_at"], item["end_at"], item["elapsed"] = (
+                            Taska.get_end_at(item)
+                        )
+                    break
             except subprocess.TimeoutExpired:
                 pass
+
         del proc
         return job_dir
 
@@ -415,27 +449,63 @@ class Taska:
         return not path.is_dir()
 
     @classmethod
-    def get_pids_info(cls, pids: typing.List[int], root_path: Path):
+    def get_pids_info(cls, pids: typing.List[int]):
         items: dict = {}
+        root_path = cls.ROOT_PATH
+        if root_path is None:
+            raise RuntimeError("Taska.ROOT_PATH is not set")
         now = time.time()
         for pid in pids:
-            proc = Process(pid)
+            try:
+                proc = Process(pid)
+                status = proc.status()
+                job_dir = Path(proc.cwd()).relative_to(root_path).as_posix()
+                start_at = ttime(proc.create_time())
+                elapsed = read_time(now - proc.create_time(), shorten=True)
+                memory = read_size(proc.memory_info().rss, shorten=True)
+            except NoSuchProcess:
+                proc = None
+                job_dir = status = start_at = elapsed = memory = "-"
             item = {
                 "pid": pid,
-                "status": proc.status(),
-                "job_dir": Path(proc.cwd()).relative_to(root_path).as_posix(),
-                "start_at": ttime(proc.create_time()),
-                "elapsed": read_time(now - proc.create_time(), shorten=True),
-                "memory": read_size(proc.memory_info().rss, shorten=True),
+                "status": status,
+                "job_dir": job_dir,
+                "start_at": start_at,
+                "elapsed": elapsed,
+                "memory": memory,
             }
             items[pid] = item
         return items
 
+    @classmethod
+    def get_end_at(cls, item):
+        if not cls.ROOT_PATH:
+            raise ValueError("Taska.ROOT_PATH is not set")
+        result_path = cls.ROOT_PATH.joinpath(item["job_dir"]).joinpath("result.jsonl")
+        result = (item["start_at"], "-", "-")
+        if result_path.is_file():
+            with open(result_path, "r", encoding="utf-8") as f:
+                pid = item["pid"]
+                regex = re.compile(f'"pid": ?{pid},')
+                for line in f:
+                    if regex.search(line):
+                        data = json.loads(line)
+                        if data.get("pid") == pid:
+                            result = (
+                                data["start_at"],
+                                data["end_at"],
+                                read_time(
+                                    ptime(data["end_at"]) - ptime(data["start_at"]),
+                                    shorten=True,
+                                ),
+                            )
+        return result
+
 
 def test():
-    root_dir = Path("../demo_path/")
-    Taska.prepare_default_env(root_dir, force=False)
-    ta = Taska(root_dir)
+    Taska.ROOT_PATH = Path("../demo_path/").resolve()
+    Taska.prepare_default_env(Taska.ROOT_PATH, force=False)
+    ta = Taska()
     print(ta.tree)
     print(list(ta.get_todos()))
     print(datetime.now())
