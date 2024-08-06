@@ -259,9 +259,10 @@ def get_list_html(path: Path):
         kill_html = ""
         for pid_dir in [path.parent, path]:
             try:
-                pid = int(pid_dir.joinpath("pid.txt").read_bytes())
-                if is_running(pid):
-                    kill_html = f" | <a style='color:red' href='/console?kill={pid}&signal=15'>Kill - {pid}</a>"
+                if pid_dir.is_dir():
+                    pid = int(pid_dir.joinpath("pid.txt").read_bytes())
+                    if is_running(pid):
+                        kill_html = f" | <a style='color:red' href='/console?kill={pid}&signal=15'>Kill - {pid}</a>"
             except (FileNotFoundError, ValueError):
                 pass
         html += f"<a style='color:red' href='/launch/{path_arg}?timeout=2'>Launch Job</a> | <a style='color:#009879' href='/console'>Console</a>{kill_html}"
