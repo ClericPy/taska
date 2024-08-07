@@ -1,3 +1,3 @@
 """Taska is a web console for running python code"""
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
