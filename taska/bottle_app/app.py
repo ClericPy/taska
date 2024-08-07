@@ -147,7 +147,7 @@ class AuthPlugin(object):
         def wrapper(*args, **kwargs):
             valid = self.is_valid(rule)
             if not valid:
-                if rule != "/login":
+                if rule not in {"/login", "/favicon.ico"}:
                     response.set_cookie("from_url", request.url, path="/", max_age=3600)
                 redirect("/login")
             request.environ["auth_ok"] = 1
