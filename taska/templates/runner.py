@@ -158,8 +158,16 @@ def start_job(entrypoint, params, workspace_dir, EXEC_GLOBAL_FUTURE: Future):
             if module_path.is_file():
                 module = module_path.stem
             code = f"import {module}"
+            if isinstance(params, dict):
+                KWS = params
+                ARGS = []
+            elif isinstance(params, list):
+                KWS = {}
+                ARGS = params
+            else:
+                raise TypeError("Invalid params type: %s. only support list/dict" % type(params))
             if function:
-                code += f"; EXEC_GLOBAL_FUTURE.set_result({module}.{function}(**RUNNER_PARAMS))"
+                code += f"; EXEC_GLOBAL_FUTURE.set_result({module}.{function}(*ARGS, **KWS))"
             else:
                 code += "; EXEC_GLOBAL_FUTURE.set_result('no result')"
             try:
@@ -167,7 +175,8 @@ def start_job(entrypoint, params, workspace_dir, EXEC_GLOBAL_FUTURE: Future):
                     code,
                     {
                         "EXEC_GLOBAL_FUTURE": EXEC_GLOBAL_FUTURE,
-                        "RUNNER_PARAMS": params,
+                        "ARGS": ARGS,
+                        "KWS": KWS,
                     },
                 )
                 if not EXEC_GLOBAL_FUTURE.done():

@@ -261,7 +261,7 @@ class Taska:
     ROOT_PATH: typing.Optional[Path] = None
     TREE_LEVELS = [RootDir, PythonDir, VenvDir, WorkspaceDir, JobDir]
     LATEST_PROC_CACHE: dict = {}
-    CACHE_LENGTH = 100
+    CACHE_LENGTH = 50
 
     def __init__(self):
         if self.ROOT_PATH is None:
